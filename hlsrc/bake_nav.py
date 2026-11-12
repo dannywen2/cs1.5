@@ -33,8 +33,33 @@ def main():
     clips = b.clipnodes()
     head = models[0]["headnode"][1]
 
-    def solid(x, y, z):
-        num = head
+    # brush 实体 (func_breakable 箱子等) 自己也有 hull1 树, 从 model 0 走不到。
+    # 不把它们算进来, nav 会把箱子内部当成可站立地面 —— 表现为 bot 想走进箱子、
+    # 玩家站在箱子上却又"陷下去"。把它们的根节点一并纳入 solid 测试。
+    SOLID_BRUSH = {"func_breakable", "func_wall", "func_door", "func_door_rotating",
+                   "func_button", "func_pushable"}
+    brush_boxes = []      # (root, x0, y0, z0, x1, y1, z1) 已按玩家盒外扩
+    for e in b.entities():
+        if e.get("classname") not in SOLID_BRUSH:
+            continue
+        mdl = e.get("model", "")
+        if not mdl.startswith("*"):
+            continue
+        mi = int(mdl[1:])
+        if mi <= 0 or mi >= len(models):
+            continue
+        h1 = models[mi]["headnode"][1]
+        if h1 < 0:
+            continue
+        mn, mx = models[mi]["mins"], models[mi]["maxs"]
+        # hull1 已按 32x32x72 膨胀, 所以点测试只会在 brush 附近命中;
+        # 外扩 40 保证筛选不会误杀 (比精确值宽松一点没有代价)。
+        brush_boxes.append((h1, mn[0] - 40, mn[1] - 40, mn[2] - 40,
+                            mx[0] + 40, mx[1] + 40, mx[2] + 40))
+    print("solid brush hull1 roots", len(brush_boxes))
+
+    def _walk(root, x, y, z):
+        num = root
         guard = 0
         while num >= 0:
             if num >= len(clips) or guard > 512:
@@ -44,6 +69,16 @@ def main():
             n, dist, _t = planes[pn]
             num = c0 if (n[0] * x + n[1] * y + n[2] * z - dist) >= 0 else c1
         return num == CONTENTS_SOLID
+
+    def solid(x, y, z):
+        if _walk(head, x, y, z):
+            return True
+        for root, x0, y0, z0, x1, y1, z1 in brush_boxes:
+            if x < x0 or x > x1 or y < y0 or y > y1 or z < z0 or z > z1:
+                continue
+            if _walk(root, x, y, z):
+                return True
+        return False
 
     # ---- 1. 三角形投影得到候选高度 ----
     polys = b.face_polys()

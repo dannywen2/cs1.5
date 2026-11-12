@@ -7,6 +7,10 @@ import * as A from './asset.js';
 import { S, clamp, rand, choice, forwardVec, rightVec, yawTo, fmtTime, play, showCenter, reportPlayer, hitText, giveAmmo, dist3 } from './state.js';
 
 const DEG = Math.PI / 180;
+// 鼠标: 每 "count" (浏览器 movementX 单位) 转多少度, 再乘玩家灵敏度倍率。
+// 0.06 * 2.0 = 0.12 度/像素, 约 3000 像素转一圈 —— 与 CS 默认手感同量级。
+const DEG_PER_COUNT = 0.06;
+const DEFAULT_SENSITIVITY = 2.0;
 const CROUCH_EYE = 40;
 const HULL_MID = 36;            // hull1 按 32x32x72 膨胀, 只需测玩家中心
 const SKY_D = 2800;
@@ -756,11 +760,16 @@ export function updateEngine(dt) {
   engineTime += d;
   const p = S.player;
 
-  // 鼠标视角: 开镜灵敏度由外部模块写入 S.player.sensitivity
+  // 鼠标视角。
+  //
+  // 旧实现是 yaw += mouseDX * sensitivity * 0.02, sensitivity=40 -> 0.8 度/像素。
+  // 那意味着横移 450 像素就转完 360 度, 鼠标稍微一动视角就飞掉。
+  // 现在 sensitivity 改为"倍率"(默认 2.0), 每像素角度 = 0.06 * 倍率 = 0.12 度,
+  // 与 CS 里 sensitivity 2~3 / 400~800 DPI 的手感接近 (约 3000 像素转一圈)。
   if (!S.buyMenuOpen && !p.dead) {
-    const sens = p.sensitivity * 0.02;
-    p.yaw += (S.mouseDX || 0) * sens;
-    p.pitch = clamp(p.pitch + (S.mouseDY || 0) * sens, -90, 90);
+    const degPerPx = DEG_PER_COUNT * (Number.isFinite(p.sensitivity) ? p.sensitivity : DEFAULT_SENSITIVITY);
+    p.yaw += (S.mouseDX || 0) * degPerPx;
+    p.pitch = clamp(p.pitch + (S.mouseDY || 0) * degPerPx, -90, 90);
   }
   S.mouseDX = 0;
   S.mouseDY = 0;

@@ -38,7 +38,8 @@ export const S = {
     nades: { he: 0, flash: 0 },
     dead: false,
     crouching: false,
-    sensitivity: 40,
+    sensitivity: 2.0,        // 倍率 (每像素 0.06 度 x 倍率), 见 engine.js DEG_PER_COUNT
+    sensitivityBase: 2.0,    // 用户设定值, 开镜/关镜后恢复到它
   },
 
   // ---- 武器 ----
@@ -199,4 +200,12 @@ export function hitText(msg, dur = 0.08) {
   S.hitMarker = msg;
   S.hitMarkerUntil = S.time + dur;
   S.hooks.hitText(msg, dur);
+}
+
+// 设置鼠标灵敏度倍率 (0.2 ~ 8), 同时更新用户基准值, 换回合/开镜后不会被重置
+export function setSensitivity(mult) {
+  const v = clamp(Number(mult) || 0, 0.2, 8);
+  S.player.sensitivityBase = v;
+  S.player.sensitivity = S.scoped ? v * 0.4 : v;
+  return v;
 }

@@ -142,6 +142,21 @@ function ringCells(center, r0, r1, n = 8) {
   return out.slice(0, n);
 }
 
+// 在 p 周围 [r0, r1] 格内随机取一个可走格 (返回格坐标)。
+// 用于 bot 的巡逻目标: 保持"在附近晃"的手感, 同时让寻路目标高概率重复,
+// 流场缓存才能真正命中 (见 Bot.repath 的注释)。
+function pickNearbyGoal(p, r0, r1) {
+  const c = A.cellOf(p);
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const ang = Math.random() * Math.PI * 2;
+    const r = r0 + Math.random() * (r1 - r0);
+    const cx = Math.round(c[0] + Math.cos(ang) * r);
+    const cy = Math.round(c[1] + Math.sin(ang) * r);
+    if (A.layers(cx, cy).length) return [cx, cy];
+  }
+  return null;
+}
+
 function computePosts() {
   const sc = A.SITE_CELLS || {};
   const a = sc.A || [0, 0], b = sc.B || [0, 0];
@@ -350,8 +365,12 @@ class Bot {
     } else if (this.role === 'defend' && this.post) {
       goal = this.post;
     } else {
-      const pool = this.team === 't' ? T_ROAM_CELLS : ROAM_CELLS;
-      goal = pool.length ? choice(pool) : A.cellOf(this.pos);
+      // 巡逻目标就近取: 旧实现从全图 25460 个可走格里随机挑一个 (ROAM_CELLS),
+      // 等于每次都让 bot 横穿整张图 —— 既不像 CS 的 bot 行为, 也会让寻路的
+      // 目标格每次都不同, 流场缓存永远不命中 (实测每次新目标要重建流场
+      // 12~17 ms, 8 个 bot 轮流重算就表现为周期性掉帧)。
+      // 现在在自己周围 12~40 格内取点: 路径短、目标重复率高、寻路接近免费。
+      goal = pickNearbyGoal(this.pos, 12, 40) || (ROAM_CELLS.length ? choice(ROAM_CELLS) : A.cellOf(this.pos));
     }
     if (!A.layers(goal[0], goal[1]).length) goal = A.nearestOpen(goal);
     this.goal = goal;
@@ -859,6 +878,12 @@ function explodeNade(g) {
   const eye = obj3([pos[0], pos[1], pos[2]]);
   const radius = g.kind === 'he' ? HE_RADIUS : FLASH_RADIUS;
   play(g.kind === 'he' ? 'explode' : 'flash');
+  // 玩家眼位: 与 bot 判定用同一个采样点, 保证三方规则一致
+  const playerEye = [S.player.pos[0], S.player.pos[1] + A.EYE_HEIGHT, S.player.pos[2]];
+  const playerWithinRadius = !S.player.dead
+    && dist3(pos, playerEye) < radius
+    && A.gridClear(eye, obj3(playerEye), 8);   // 墙后不生效 (旧实现漏了这个判定)
+
   if (g.kind === 'he') {
     for (const bot of S.enemies.concat(S.allies).slice()) {
       if (!bot.enabled || bot.health <= 0) continue;
@@ -867,11 +892,19 @@ function explodeNade(g) {
       if (d >= radius || !A.gridClear(eye, t, 8)) continue;
       bot.takeDamage(Math.round(100 * (1 - d / radius)), false, pos, '你');
     }
-    const pd = dist3(pos, [S.player.pos[0], S.player.pos[1] + A.EYE_HEIGHT, S.player.pos[2]]);
-    if (pd < radius) damagePlayer(Math.round(100 * (1 - pd / radius)));
+    if (playerWithinRadius) {
+      const pd = dist3(pos, playerEye);
+      damagePlayer(Math.round(100 * (1 - pd / radius)));
+    }
     spawnDebris(pos, 10);
   } else {
-    S.whiteFlash = Math.max(S.whiteFlash, 235);
+    // 闪光: 按距离与遮挡衰减, 不再是"全图无条件满屏白"
+    if (playerWithinRadius) {
+      const pd = dist3(pos, playerEye);
+      const falloff = 1 - pd / radius;                 // 0..1, 越近越强
+      const amount = Math.round(120 + 115 * Math.max(0, Math.min(1, falloff)));
+      S.whiteFlash = Math.max(S.whiteFlash, amount);
+    }
     for (const bot of S.enemies.concat(S.allies)) {
       if (!bot.enabled) continue;
       const t = obj3([bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
@@ -1072,6 +1105,11 @@ function tickRound(dt) {
 export function nextRound() {
   cancelTimers(true);
   clearBots();
+  // 回合换了目标包点/洞口状态会变, 上回合的流场与路径缓存全部作废
+  if (typeof A.clearPathCache === 'function') A.clearPathCache();
+  // 立刻重建包点流场 (~26 ms)。调用点包括 initGame (加载界面后)、回合结算
+  // (4 秒过场消息里) 和调试台, 都不会落在玩家正在移动的那一帧。
+  if (typeof A.warmFlowGoals === 'function') A.warmFlowGoals();
   clearListMeshes(S.grenades);
   clearListMeshes(S.debris);
   clearBombEntities();
@@ -1111,7 +1149,8 @@ export function nextRound() {
   p.pitch = 0;
   p.scoped = false;
   p.crouching = false;
-  p.sensitivity = 40;
+  // 灵敏度是倍率, 每回合恢复到用户设定值 (不能写死, 否则用户改了会被重置)
+  p.sensitivity = Number.isFinite(p.sensitivityBase) ? p.sensitivityBase : 2.0;
   // 护甲/投掷物/拆弹钳存活时跨回合保留
   S.shootingEnabled = true;
   S.reloading = false;

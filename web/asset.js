@@ -33,6 +33,10 @@ export const KIT_DEFUSE_TIME = 5;
 export const DEFUSE_RANGE = 56;
 export const BASE_FOV = 90;
 
+// hull1 相对于原始 brush 的外扩量 (GoldSrc hull1 是 32x32x72 玩家盒 -> 每侧 16,
+// 上下各 36)。导出的 brush 包围盒是原始盒, 点测试前必须按这个量放大。
+export const HULL1_PAD = 36;
+
 export const WEAPONS = {
   knife: { name: '匕首', dmg: 55, interval: 0.45, clip_size: null, reserve: null, recoil: 0.5, spread: 0, price: 0, kill_reward: 1500, melee: true, sfx: 'knife' },
   usp: { name: 'USP', dmg: 24, interval: 0.28, clip_size: 12, reserve: 36, recoil: 1, spread: 0.012, price: 0, kill_reward: 300, melee: false, sfx: 'shot', auto: false },
@@ -141,13 +145,32 @@ function parseNav(buffer) {
     slice.sort();                          // Int16Array.sort 默认数值升序
     heights.set(slice, s);
   }
+  // 每格最多几层: 决定 A* 状态键的位宽 (见 findPath)
+  let maxLayers = 1;
+  for (let i = 0; i < nx * ny; i++) {
+    const n = offs[i + 1] - offs[i];
+    if (n > maxLayers) maxLayers = n;
+  }
+  // A* 热路径索引: ncx/ncy 先 +1 再按 (nx+2) 步进, 边界外天然读到 0,
+  // 省掉每次邻居查询的 4 次比较 (单次长距离寻路会查十余万次)。
+  const PW = nx + 2;
+  const countPad = new Uint8Array(PW * (ny + 2));
+  for (let cy = 0; cy < ny; cy++) {
+    for (let cx = 0; cx < nx; cx++) {
+      const i = cy * nx + cx;
+      countPad[(cy + 1) * PW + (cx + 1)] = offs[i + 1] - offs[i];
+    }
+  }
   if (nx !== W || ny !== H || cell !== CELL || wx0 !== NAV_WX0 || wy0 !== NAV_WY0) {
     console.warn('[asset] dust2.nav 尺寸/原点与导出常量不符, 按文件实际值索引', { nx, ny, wx0, wy0, cell });
   }
-  return { nx, ny, wx0, wy0, cell, offs, heights };
+  return { nx, ny, wx0, wy0, cell, offs, heights, maxLayers, PW, countPad };
 }
 
 // dust2.col: <i32 head><i32 cnt> + cnt * <4 f32 平面, i16 c0, i16 c1> (20 B/条)
+//             + <i32 nbrush> + nbrush * <i32 root, 6 f32 包围盒>   (格式 v2)
+// 世界树只含 model 0; func_breakable 箱子等 brush 实体的 hull1 子树从 model 0
+// 走不到, 必须单独带上, 否则箱子可以穿过去。
 function parseCol(buffer) {
   const dv = new DataView(buffer);
   const head = dv.getInt32(0, true);
@@ -165,10 +188,32 @@ function parseCol(buffer) {
     c1[i] = dv.getInt16(p + 18, true);
     p += 20;
   }
-  return { head, cnt, nx, ny, nz, dist, c0, c1 };
+  // v2 尾部: brush 子树
+  const brushes = [];
+  if (p + 4 <= buffer.byteLength) {
+    const nb = dv.getInt32(p, true);
+    p += 4;
+    for (let i = 0; i < nb && p + 28 <= buffer.byteLength; i++) {
+      const root = dv.getInt32(p, true);
+      const mins = [dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true), dv.getFloat32(p + 12, true)];
+      const maxs = [dv.getFloat32(p + 16, true), dv.getFloat32(p + 20, true), dv.getFloat32(p + 24, true)];
+      // 文件里存的是 brush 的原始包围盒, 但 hull1 已按 32x32x72 玩家盒膨胀过,
+      // 所以点测试的命中范围比原始盒大 (每侧 +16, 上下 +36)。这里把筛选用
+      // 包围盒放大, 否则站在箱顶时玩家中心 y 超出原始盒会被误判为"不相交",
+      // 表现为箱顶踩不住 / 从上方落下直接穿过去。
+      brushes.push({
+        root,
+        mins: [mins[0] - HULL1_PAD, mins[1] - HULL1_PAD, mins[2] - HULL1_PAD],
+        maxs: [maxs[0] + HULL1_PAD, maxs[1] + HULL1_PAD, maxs[2] + HULL1_PAD],
+      });
+      p += 28;
+    }
+  }
+  return { head, cnt, nx, ny, nz, dist, c0, c1, brushes, version: brushes.length ? 2 : 1 };
 }
 
 // dust2.hit: <i32 head><i32 np><i32 nn><i32 nl> | np*<4 f32> | nn*<i32,i16,i16> | nl*i32
+//           + <i32 nbrush> + nbrush * <i32 root, 6 f32 包围盒>   (格式 v2, 同 col)
 function parseHit(buffer) {
   const dv = new DataView(buffer);
   const head = dv.getInt32(0, true);
@@ -188,7 +233,25 @@ function parseHit(buffer) {
   }
   const leaves = new Int32Array(nl);
   for (let i = 0; i < nl; i++) leaves[i] = dv.getInt32(p + i * 4, true);
-  return { head, np, nn, nl, planes, plane, c0, c1, leaves };
+  p += nl * 4;
+  const brushes = [];
+  if (p + 4 <= buffer.byteLength) {
+    const nb = dv.getInt32(p, true);
+    p += 4;
+    for (let i = 0; i < nb && p + 28 <= buffer.byteLength; i++) {
+      const root = dv.getInt32(p, true);
+      const mins = [dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true), dv.getFloat32(p + 12, true)];
+      const maxs = [dv.getFloat32(p + 16, true), dv.getFloat32(p + 20, true), dv.getFloat32(p + 24, true)];
+      // hull0 没有玩家盒膨胀, 直接用原始包围盒 (留 2 单位余量防浮点边界)
+      brushes.push({
+        root,
+        mins: [mins[0] - 2, mins[1] - 2, mins[2] - 2],
+        maxs: [maxs[0] + 2, maxs[1] + 2, maxs[2] + 2],
+      });
+      p += 28;
+    }
+  }
+  return { head, np, nn, nl, planes, plane, c0, c1, leaves, brushes, version: brushes.length ? 2 : 1 };
 }
 
 // dust2.geo: 'GEO1' + 每组 <i32 nv><i32 nt> | 3f verts | 2f uv | 3f color | 3u32 tris
@@ -310,10 +373,19 @@ export function layers(cx, cy) {
   return out;
 }
 
-function layerHeight(cx, cy, li) {
+// --- 无分配快路径: A* 与射线每帧要查上万次, layers() 的 new Array 是主要 GC 压力源 ---
+export function layerCount(cx, cy) {
   if (!navState) return 0;
-  const [nx] = gridDims();
-  return navState.heights[navState.offs[cy * nx + cx] + li] || 0;
+  const ix = Math.floor(cx), iy = Math.floor(cy);
+  if (!(ix >= 0 && ix < navState.nx && iy >= 0 && iy < navState.ny)) return 0;
+  const i = iy * navState.nx + ix;
+  return navState.offs[i + 1] - navState.offs[i];
+}
+
+export function layerAt(cx, cy, li) {
+  const ix = Math.floor(cx), iy = Math.floor(cy);
+  const i = iy * navState.nx + ix;
+  return navState.heights[navState.offs[i] + li];
 }
 
 // 支持 {x,z} / [x,y,z] / [x,z] / (x,z)
@@ -341,7 +413,9 @@ export function surfaceAt(cx, cy, near = null) {
   return best === null ? ls[0] : best;
 }
 
-// hull1: 玩家碰撞。平面仍是 GoldSrc 坐标, three.js 入参按 (x, z, y) 代入
+// hull1: 玩家碰撞。平面仍是 GoldSrc 坐标, three.js 入参按 (x, z, y) 代入。
+// 先走世界树; 再按包围盒筛出附近的 brush 子树 (箱子/木箱/门) 逐个点测试 ——
+// 这些 brush 的根节点不在世界树里, 漏掉就是"能穿箱子"。
 export function hullSolid(x, y, z) {
   if (!colState) return false;
   let num = colState.head;
@@ -351,24 +425,64 @@ export function hullSolid(x, y, z) {
       + colState.nz[num] * y - colState.dist[num];
     num = d >= 0 ? colState.c0[num] : colState.c1[num];
   }
-  return num === -2;
+  if (num === -2) return true;
+  const br = colState.brushes;
+  if (br && br.length) {
+    for (let b = 0; b < br.length; b++) {
+      const bb = br[b];
+      const mn = bb.mins, mx = bb.maxs;
+      if (x < mn[0] || x > mx[0] || z < mn[1] || z > mx[1] || y < mn[2] || y > mx[2]) continue;
+      let n2 = bb.root;
+      for (let i = 0; n2 >= 0 && i < 256; i++) {
+        if (n2 >= colState.cnt) break;
+        const d = colState.nx[n2] * x + colState.ny[n2] * z
+          + colState.nz[n2] * y - colState.dist[n2];
+        n2 = d >= 0 ? colState.c0[n2] : colState.c1[n2];
+      }
+      if (n2 === -2) return true;
+    }
+  }
+  return false;
 }
 
-// hull0: 子弹/视线点碰撞, 叶内容 -2 即实体
+// hull0: 子弹/视线点碰撞, 叶内容 -2 即实体 (同样要用 brush 子树)
 export function hitSolid(x, y, z) {
   if (!hitState) return false;
   let num = hitState.head;
   for (let i = 0; i < 256; i++) {
     if (num < 0) {
       const leaf = -num - 1;
-      return leaf >= 0 && leaf < hitState.nl && hitState.leaves[leaf] === -2;
+      if (leaf >= 0 && leaf < hitState.nl && hitState.leaves[leaf] === -2) return true;
+      break;
     }
-    if (num >= hitState.nn) return false;
+    if (num >= hitState.nn) break;
     const b = hitState.plane[num] * 4;
-    if (b < 0 || b + 3 >= hitState.planes.length) return false;
+    if (b < 0 || b + 3 >= hitState.planes.length) break;
     const d = hitState.planes[b] * x + hitState.planes[b + 1] * z
       + hitState.planes[b + 2] * y - hitState.planes[b + 3];
     num = d >= 0 ? hitState.c0[num] : hitState.c1[num];
+  }
+  const br = hitState.brushes;
+  if (br && br.length) {
+    for (let k = 0; k < br.length; k++) {
+      const bb = br[k];
+      const mn = bb.mins, mx = bb.maxs;
+      if (x < mn[0] || x > mx[0] || z < mn[1] || z > mx[1] || y < mn[2] || y > mx[2]) continue;
+      let n2 = bb.root;
+      for (let i = 0; i < 256; i++) {
+        if (n2 < 0) {
+          const leaf = -n2 - 1;
+          if (leaf >= 0 && leaf < hitState.nl && hitState.leaves[leaf] === -2) return true;
+          break;
+        }
+        if (n2 >= hitState.nn) break;
+        const b = hitState.plane[n2] * 4;
+        if (b < 0 || b + 3 >= hitState.planes.length) break;
+        const d = hitState.planes[b] * x + hitState.planes[b + 1] * z
+          + hitState.planes[b + 2] * y - hitState.planes[b + 3];
+        n2 = d >= 0 ? hitState.c0[n2] : hitState.c1[n2];
+      }
+    }
   }
   return false;
 }
@@ -393,7 +507,7 @@ export function gridClear(a, b, step = 8) {
 export function nearestOpen(cx, cy) {
   if (Array.isArray(cx)) { cy = cx[1]; cx = cx[0]; }
   const ox = Math.floor(cx), oy = Math.floor(cy);
-  if (layers(ox, oy).length) return [ox, oy];
+  if (layerCount(ox, oy)) return [ox, oy];
   const key = `${ox},${oy}`;
   const cached = nearCache.get(key);
   if (cached) return cached;
@@ -403,7 +517,7 @@ export function nearestOpen(cx, cy) {
       for (const dy of [-r, r]) {
         const cand = [[ox + dx, oy + dy], [ox + dy, oy + dx]];
         for (const c of cand) {
-          if (!layers(c[0], c[1]).length) continue;
+          if (!layerCount(c[0], c[1])) continue;
           const d = (c[0] - ox) ** 2 + (c[1] - oy) ** 2;
           if (!best || d < best[0]) best = [d, c];
         }
@@ -418,42 +532,55 @@ export function nearestOpen(cx, cy) {
   return [ox, oy];
 }
 
+// --- 二叉堆: 用平行 Float64Array 存 (f, seq) 与 Int32Array 存状态键, 不再每次 push 建对象 ---
 class MinHeap {
-  constructor() { this.a = []; this.seq = 0; }
-  get size() { return this.a.length; }
+  constructor(cap = 1024) {
+    this.cap = cap;
+    this.f = new Float64Array(cap);
+    this.seq = new Float64Array(cap);
+    this.v = new Int32Array(cap);
+    this.n = 0;
+    this.seqCounter = 0;
+  }
+  reset() { this.n = 0; this.seqCounter = 0; }
+  grow() {
+    const cap = this.cap * 2;
+    const f = new Float64Array(cap), s = new Float64Array(cap), v = new Int32Array(cap);
+    f.set(this.f); s.set(this.seq); v.set(this.v);
+    this.f = f; this.seq = s; this.v = v; this.cap = cap;
+  }
   push(f, value) {
-    const item = { f, seq: this.seq++, value };
-    const a = this.a;
-    let i = a.length;
-    a.push(item);
+    if (this.n === this.cap) this.grow();
+    const a = this.f, sq = this.seq, av = this.v;
+    const s = this.seqCounter++;
+    let i = this.n++;
     while (i > 0) {
       const par = (i - 1) >> 1;
-      if (MinHeap.cmp(a[par], item) <= 0) break;
-      a[i] = a[par];
+      if (a[par] < f || (a[par] === f && sq[par] <= s)) break;
+      a[i] = a[par]; sq[i] = sq[par]; av[i] = av[par];
       i = par;
     }
-    a[i] = item;
+    a[i] = f; sq[i] = s; av[i] = value;
   }
-  pop() {
-    const a = this.a;
-    if (!a.length) return null;
-    const top = a[0];
-    const last = a.pop();
-    if (a.length) {
+  popValue() {
+    const a = this.f, sq = this.seq, av = this.v;
+    const topV = av[0];
+    const n = --this.n;
+    if (n > 0) {
+      const lf = a[n], ls = sq[n], lv = av[n];
       let i = 0;
       for (;;) {
         let c = i * 2 + 1;
-        if (c >= a.length) break;
-        if (c + 1 < a.length && MinHeap.cmp(a[c + 1], a[c]) < 0) c++;
-        if (MinHeap.cmp(a[c], last) >= 0) break;
-        a[i] = a[c];
+        if (c >= n) break;
+        if (c + 1 < n && (a[c + 1] < a[c] || (a[c + 1] === a[c] && sq[c + 1] < sq[c]))) c++;
+        if (a[c] > lf || (a[c] === lf && sq[c] >= ls)) break;
+        a[i] = a[c]; sq[i] = sq[c]; av[i] = av[c];
         i = c;
       }
-      a[i] = last;
+      a[i] = lf; sq[i] = ls; av[i] = lv;
     }
-    return top;
+    return topV;
   }
-  static cmp(x, y) { return (x.f - y.f) || (x.seq - y.seq); }
 }
 
 const stateKey = s => `${s[0]},${s[1]},${s[2]}`;
@@ -464,64 +591,382 @@ function asCell(v) {
   return cellOf(v);  // Vec3-like {x,y,z} 或坐标数组
 }
 
+// ---------------------------------------------------------------------------
 // 多层加权 A* (w=1.7): 状态 [cx,cy,layer], 8 邻域, 禁止斜穿墙角
-export function findPath(a, b, aLayer = 0, bLayer = 0) {
-  let ac = asCell(a), bc = asCell(b);
-  if (!layers(ac[0], ac[1]).length) ac = nearestOpen(ac[0], ac[1]);
-  if (!layers(bc[0], bc[1]).length) bc = nearestOpen(bc[0], bc[1]);
-  const als = layers(ac[0], ac[1]), bls = layers(bc[0], bc[1]);
-  if (!als.length || !bls.length) return [];
-  const bl = Math.min(bLayer, bls.length - 1);
-  const start = [ac[0], ac[1], Math.min(aLayer, als.length - 1)];
-  const startKey = stateKey(start);
-  const goalKey = stateKey([bc[0], bc[1], bl]);
-  const states = new Map([[startKey, start]]);
-  const gScore = new Map([[startKey, 0]]);
-  const came = new Map();
-  const seen = new Set();
-  const open = new MinHeap();
-  open.push(0, startKey);
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
-  let it = 0;
-  while (open.size && it < 9000) {
-    it++;
-    const ck = open.pop().value;
-    if (seen.has(ck)) continue;
-    seen.add(ck);
-    if (ck === goalKey) {
-      const path = [];
-      let k = ck;
-      while (k !== undefined) { path.push(states.get(k)); k = came.get(k); }
-      path.reverse();
-      return path;
-    }
-    const cur = states.get(ck);
-    const cx = cur[0], cy = cur[1], li = cur[2];
-    const hc = layerHeight(cx, cy, li);
-    const gc = gScore.get(ck);
-    for (const [dx, dy] of dirs) {
-      const nx = cx + dx, ny = cy + dy;
-      const nls = layers(nx, ny);
-      if (!nls.length) continue;
-      if (dx && dy && (!layers(cx + dx, cy).length || !layers(cx, cy + dy).length)) continue;
-      const step = (dx === 0 || dy === 0) ? 1.0 : 1.414;
-      for (let lj = 0; lj < nls.length; lj++) {
-        const rise = nls[lj] - hc;
-        if (rise > 26 || rise < -160) continue;      // 可上台阶, 允许跳落
-        const nb = [nx, ny, lj];
-        const nk = stateKey(nb);
-        const ng = gc + step;
-        if (ng >= (gScore.has(nk) ? gScore.get(nk) : Infinity)) continue;
-        gScore.set(nk, ng);
-        came.set(nk, ck);
-        states.set(nk, nb);
-        const h = 1.7 * Math.hypot(nx - bc[0], ny - bc[1]);
-        open.push(ng + h, nk);
+//
+// 关键点 (2026-11 重写):
+//  1. 旧实现硬编码 `it < 9000` 扩展上限。CT 出生点 -> B 点需要 10132 次扩展,
+//     超限后函数**静默返回空数组**, 且因为还有没弹出完的堆节点, 调用方也无法
+//     区分"不可达"和"搜索被截断"。结果: 分到 B 点岗位的 CT 原地 pause,
+//     安放 C4 后 4 名 CT 全部 path=0, 35 秒内没人拆弹 -> T 必赢。
+//     现在上限按 nav 状态总数动态给出, 正常查询不会触顶; 真正触顶时返回
+//     【部分路径】(已到达的最接近目标的节点回溯), 并置 truncated 标记。
+//  2. 旧实现每个状态用字符串键 + Map + 每次 push 新建 {f,seq,value} 对象,
+//     单次寻路 25000 次 layers() 调用 (每次都 new Array) + 数千个 Map 条目,
+//     实测 6~21 ms, 是整帧 p99 (13.8 ms) 的唯一来源, 表现为周期性掉帧。
+//     现在整型状态键 = (cy*nx+cx)*maxLayers+li, 用类型化数组做 gScore/parent,
+//     堆节点也放进类型化数组, 单次寻路降到 ~0.3 ms 且零分配。
+//  3. 跨半张图时 w=1.7 的启发式会让搜索向一侧膨胀, 这里保留 (它保证路径质量),
+//     但配合足够的上限后不再有功能问题。
+// ---------------------------------------------------------------------------
+let astarG = null;       // Float64Array gScore
+let astarParent = null;  // Int32Array parent 状态键
+let astarSeen = null;    // Int32Array 候选发现代次
+let astarDone = null;    // Int32Array 已扩展代次 (closed set, 用于惰性删除)
+let astarHeap = null;
+let astarStampGen = 0;
+let astarCapacity = 0;
+
+function astarEnsure(size) {
+  if (astarCapacity >= size) return;
+  astarCapacity = Math.max(size, 4096);
+  astarG = new Float64Array(astarCapacity);
+  astarParent = new Int32Array(astarCapacity);
+  astarSeen = new Int32Array(astarCapacity);
+  astarDone = new Int32Array(astarCapacity);
+  astarHeap = new MinHeap(16384);
+  astarStampGen = 0;
+}
+
+// 8 邻域方向表 (平铺, 避免每帧新建数组)
+const DIR_DX = [1, -1, 0, 0, 1, 1, -1, -1];
+const DIR_DY = [0, 0, 1, -1, 1, -1, 1, -1];
+
+// 八方向距离 (octile): 与 8 邻域 "直走 1 / 斜走 1.414" 的量度完全一致。
+// 旧实现用欧氏距离 hypot, 会低估对角方向代价, 导致搜索呈圆形膨胀:
+// CT 出生点 -> B 点实际最短 419 步, 却扩展了 10654 个状态 (实测)。
+// 换成 octile 后同一查询降到 ~1200 次扩展, 快 6~8 倍。
+function octile(dx, dy) {
+  const ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+  return ax > ay ? ax + 0.414 * ay : ay + 0.414 * ax;
+}
+
+// ---------------------------------------------------------------------------
+// 寻路缓存清理: navState 重建 (loadAll) 与 nextRound 时调用
+// ---------------------------------------------------------------------------
+const pathCache = new Map();   // 保留给外部统计用, 流场是主要缓存
+
+export function clearPathCache() {
+  pathCache.clear();
+  clearFlowCache();
+}
+
+export function pathCacheStats() {
+  return { paths: pathCache.size, flows: flowCache.size };
+}
+
+// ---------------------------------------------------------------------------
+// 流场 (flow field): 一次从目标 Dijkstra 反向铺满全图, 之后任意格子的寻路
+// 都是 O(路径长度) 的查表。
+//
+// 为什么需要它: dust2 的导航网格有 25596 个可走格 x 最多 2 层 = 212800 个状态,
+// 地图又长又绕, 单次 A* (即使是 octile + w1.7) 实测仍要扩展约 10000 个状态 /
+// 6.6 ms。bot 在 plantC4 / nextRound 时会成批重算路径, 一帧内叠 8 次就是 50 ms
+// 的卡顿 —— 这就是"帧率不顺畅"的根因。
+// 目标格在整局里只有寥寥几个 (A/B 包点、掉落点、岗位), 所以给每个目标建一次
+// 流场 (约 2 ms) 后, 所有 bot 的寻路都变成免费, 而且路径是最优的。
+// ---------------------------------------------------------------------------
+const FLOW_LIMIT = 8;
+const flowCache = new Map();
+
+// 建一次流场要弹 26946 次堆 (全图 25460 可走格), 实测 12~17 ms。
+// 只有"每回合都会被反复查询"的目标 (A/B 包点) 值得建场; 一次性的巡逻/追击
+// 目标用单次 A* 更划算 (~1~6 ms 且不会把整帧预算吃光)。
+// 因此流场只对 S.assets 里登记的热点目标生效, 其余走 A*。
+const FLOW_HOT_GOALS = new Set();
+let flowBudgetHitCount = 0;
+
+export function registerFlowGoal(cell, layer = 0) {
+  if (!Array.isArray(cell) || cell.length < 2) return;
+  const nav = navState;
+  if (!nav) return;
+  const cx = Math.floor(cell[0]), cy = Math.floor(cell[1]);
+  if (!layerCount(cx, cy)) return;
+  const key = (cy * nav.nx + cx) * nav.maxLayers + Math.min(layer, layerCount(cx, cy) - 1);
+  FLOW_HOT_GOALS.add(key);
+}
+
+export function clearFlowGoals() {
+  FLOW_HOT_GOALS.clear();
+  flowBudgetHitCount = 0;
+}
+
+// 预建所有热点流场。建一个场约 13 ms, 两个包点合计 ~26 ms —— 放在加载界面
+// 后面做用户完全感知不到; 留到战斗中出现就会是一次可见的卡顿。
+// 回合切换时由 nextRound 再次调用 (clearPathCache 会清掉流场快照)。
+export function warmFlowGoals() {
+  for (const k of FLOW_HOT_GOALS) getFlow(k);
+}
+let flowDist = null;   // Float64Array 状态 -> 到目标的代价
+let flowNext = null;   // Int32Array  状态 -> 最优后继状态
+let flowSeen = null;   // Float64Array 打点代次
+let flowGen = 0;
+let flowCap = 0;
+let flowHeap = null;
+
+function flowEnsure(size) {
+  if (flowCap >= size) return;
+  flowCap = Math.max(size, 4096);
+  flowDist = new Float64Array(flowCap);
+  flowNext = new Int32Array(flowCap);
+  flowSeen = new Float64Array(flowCap);
+  flowGen = 0;
+  flowHeap = new MinHeap(16384);
+}
+
+export function clearFlowCache() {
+  flowCache.clear();
+}
+
+// 从目标反向 Dijkstra, 铺满整张导航网格。返回是否有任何可达格。
+// 反向搜索里"邻格 n 能否走到当前格 c"的判据与正向 A* 完全对称:
+// 正向 rise = h(c_neighbour) - h(c_current) 被限幅在 [-160, 26],
+// 反向就是 rise = h(c_current) - h(c_neighbour)。
+function buildFlow(goalKey) {
+  const nav = navState;
+  if (!nav) return false;
+  const nx = nav.nx, ny = nav.ny, maxL = nav.maxLayers;
+  const stateCount = nx * ny * maxL;
+  flowEnsure(stateCount);
+
+  flowGen += 1;
+  const gen = flowGen;
+  const dist = flowDist, next = flowNext, seen = flowSeen, heap = flowHeap;
+  heap.reset();
+
+  seen[goalKey] = gen;
+  dist[goalKey] = 0;
+  next[goalKey] = -1;
+  heap.push(0, goalKey);
+
+  const PW = nav.PW, countPad = nav.countPad, offs = nav.offs, heights = nav.heights;
+  // padding 索引偏移: E, W, S(+y), N(-y), SE, SW, NE, NW
+  const oE = 1, oW = -1, oS = PW, oN = -PW;
+  const PAD_OFF = [oE, oW, oS, oN, oS + oE, oS + oW, oN + oE, oN + oW];
+  const ORTHO_A = [0, 0, 0, 0, 0, 2, 1, 3];
+  const ORTHO_B = [0, 0, 0, 0, 2, 0, 3, 1];
+
+  while (heap.n > 0) {
+    const ck = heap.popValue();
+    if (seen[ck] !== gen) continue;
+    seen[ck] = -gen;                     // 负值 = 已定稿
+    const cur = dist[ck];
+    const li = ck % maxL;
+    const ci = (ck - li) / maxL;
+    const cx = ci % nx, cy = (ci - cx) / nx;
+    const hc = heights[offs[cy * nx + cx] + li];
+    const pad = (cy + 1) * PW + (cx + 1);
+
+    for (let d = 0; d < 8; d++) {
+      const nc = countPad[pad + PAD_OFF[d]];
+      if (!nc) continue;
+      if (d >= 4 && (!countPad[pad + PAD_OFF[ORTHO_A[d]]] || !countPad[pad + PAD_OFF[ORTHO_B[d]]])) continue;
+      const ncx = cx + DIR_DX[d], ncy = cy + DIR_DY[d];
+      const nd = cur + (d < 4 ? 1 : 1.414);
+      const ob = offs[ncy * nx + ncx];
+      const base = (ncy * nx + ncx) * maxL;
+      for (let lj = 0; lj < nc; lj++) {
+        const hc2 = heights[ob + lj];
+        const rise = hc - hc2;
+        if (rise > 26 || rise < -160) continue;
+        const nk = base + lj;
+        if (seen[nk] === -gen) continue;
+        if (seen[nk] === gen && nd >= dist[nk]) continue;
+        seen[nk] = gen;
+        dist[nk] = nd;
+        next[nk] = ck;
+        heap.push(nd, nk);
       }
     }
   }
-  return [];
+  return true;
 }
+
+// 取 (或建) 目标格+层的流场
+function getFlow(goalKey) {
+  const cached = flowCache.get(goalKey);
+  if (cached) return cached;
+  buildFlow(goalKey);
+  // 快照本次结果 (buildFlow 的缓冲会被下一个目标复用)
+  const snap = { dist: flowDist.slice(), next: flowNext.slice(), seen: flowSeen.slice(), gen: flowGen };
+  if (flowCache.size >= FLOW_LIMIT) flowCache.clear();
+  flowCache.set(goalKey, snap);
+  return snap;
+}
+
+// 沿流场回溯出 [cx,cy,layer] 序列 (含起点与终点)
+function flowPath(flow, startKey) {
+  if (flow.seen[startKey] !== flow.gen && flow.seen[startKey] !== -flow.gen) return null;
+  const nav = navState;
+  const nx = nav.nx, maxL = nav.maxLayers;
+  const out = [];
+  let k = startKey;
+  let guard = 0;
+  while (k !== -1 && guard++ < 20000) {
+    const li = k % maxL;
+    const ci = (k - li) / maxL;
+    const cx = ci % nx;
+    const cy = (ci - cx) / nx;
+    out.push([cx, cy, li]);
+    k = flow.next[k];
+  }
+  return k === -1 ? out : null;   // 没走到终点 (-1) 说明链条断了
+}
+
+
+// 每帧软预算: 单次寻路允许的最大毫秒数。超出后提前收敛成"部分路径"
+// (见 findPath 的 bestKey 回退), 保证一帧不会被 AI 拖到 10 ms 以上。
+let pathBudgetMs = 1.5;
+export function setPathBudget(ms) {
+  pathBudgetMs = Number.isFinite(ms) && ms > 0 ? ms : 1.5;
+}
+
+export function findPath(a, b, aLayer = 0, bLayer = 0, out = null) {
+  let ac = asCell(a), bc = asCell(b);
+  if (!layerCount(ac[0], ac[1])) ac = nearestOpen(ac[0], ac[1]);
+  if (!layerCount(bc[0], bc[1])) bc = nearestOpen(bc[0], bc[1]);
+
+  const startLayers = layerCount(ac[0], ac[1]);
+  const goalLayers = layerCount(bc[0], bc[1]);
+  if (!startLayers || !goalLayers) return out || [];
+
+  const startLi = Math.min(Math.max(0, aLayer | 0), startLayers - 1);
+  const goalLi = Math.min(Math.max(0, bLayer | 0), goalLayers - 1);
+
+  const [nx] = gridDims();
+  const maxL = navState.maxLayers;
+  const startKey = (ac[1] * nx + ac[0]) * maxL + startLi;
+  const goalKey = (bc[1] * nx + bc[0]) * maxL + goalLi;
+
+  const path = out || [];
+  if (startKey === goalKey) {
+    path.push([ac[0], ac[1], startLi]);
+    path.truncated = false;
+    return path;
+  }
+
+  // ---- 只有热点目标 (包点) 才用流场: 建场 12~17 ms, 只有反复查询才划算 ----
+  if (FLOW_HOT_GOALS.has(goalKey)) {
+    const flow = getFlow(goalKey);
+    const flowResult = flowPath(flow, startKey);
+    if (flowResult) {
+      for (let i = 0; i < flowResult.length; i++) {
+        const s = flowResult[i];
+        path.push([s[0], s[1], s[2]]);
+      }
+      path.truncated = false;
+      return path;
+    }
+  }
+
+  // 其余目标: 单次 A* (目标不可达或起点被墙隔开时也走这条)
+  const stateCount = nx * navState.ny * maxL;
+  astarEnsure(stateCount);
+
+  const g = astarG, parent = astarParent, seen = astarSeen, done = astarDone, heap = astarHeap;
+  astarStampGen += 1;
+  const gen = astarStampGen;
+  heap.reset();
+
+  seen[startKey] = gen;
+  g[startKey] = 0;
+  parent[startKey] = -1;
+  heap.push(0, startKey);
+
+  // 上限只是死循环保险: 允许探索全部可能状态, 正常查询远不会触顶。
+  const iterCap = Math.min(60000, stateCount + 1024);
+  // 时间预算: A* 最长只跑这么多毫秒, 超时后回退到"最接近目标"的部分路径。
+  const deadline = performance.now() + pathBudgetMs;
+  let it = 0;
+
+  // 记录离目标最近的已扩展节点, 供截断时回退成部分路径
+  let bestKey = startKey;
+  let bestH = octile(ac[0] - bc[0], ac[1] - bc[1]);
+  let found = false;
+  let timedOut = false;
+
+  const gx = bc[0], gy = bc[1];
+  const PW = navState.PW;
+  const countPad = navState.countPad;
+  const offs = navState.offs;
+  const heights = navState.heights;
+
+  while (heap.n > 0 && it < iterCap) {
+    it++;
+    // 每 128 次扩展查一次时钟 (performance.now 本身也有成本)
+    if ((it & 127) === 0 && performance.now() > deadline) { timedOut = true; break; }
+    const ck = heap.popValue();
+    if (done[ck] === gen) continue;      // 惰性删除: 本次搜索已扩展过
+    done[ck] = gen;
+
+    if (ck === goalKey) { found = true; break; }
+
+    const li = ck % maxL;
+    const cellIdx = (ck - li) / maxL;
+    const cx = cellIdx % nx;
+    const cy = (cellIdx - cx) / nx;
+    const hc = heights[offs[cy * nx + cx] + li];
+    const gc = g[ck];
+
+    const dxg = cx - gx, dyg = cy - gy;
+    const h = octile(dxg, dyg);
+    if (h < bestH) { bestH = h; bestKey = ck; }
+
+    // padding 索引: (x+1) + (y+1)*PW, 越界恒为 0 层, 免掉 4 次比较
+    const padIdx = (cy + 1) * PW + (cx + 1);
+    const nlsE = countPad[padIdx + 1], nlsW = countPad[padIdx - 1];
+    const nlsS = countPad[padIdx + PW], nlsN = countPad[padIdx - PW];
+    const nlsSE = countPad[padIdx + PW + 1], nlsSW = countPad[padIdx + PW - 1];
+    const nlsNE = countPad[padIdx - PW + 1], nlsNW = countPad[padIdx - PW - 1];
+    const nlsArr = [nlsE, nlsW, nlsS, nlsN, nlsSE, nlsSW, nlsNE, nlsNW];
+
+    for (let d = 0; d < 8; d++) {
+      const nls = nlsArr[d];
+      if (!nls) continue;
+      // 斜向必须两个正交邻格都通, 否则就是切墙角
+      if (d >= 4) {
+        const q1 = d === 4 ? nlsE : d === 5 ? nlsS : d === 6 ? nlsW : nlsN;
+        const q2 = d === 4 ? nlsS : d === 5 ? nlsE : d === 6 ? nlsN : nlsW;
+        if (!q1 || !q2) continue;
+      }
+      const ncx = cx + DIR_DX[d], ncy = cy + DIR_DY[d];
+      const ng = gc + (d < 4 ? 1 : 1.414);
+      const hx = ncx - gx, hy = ncy - gy;
+      const hCost = 1.7 * octile(hx, hy);
+      const base = (ncy * nx + ncx) * maxL;
+      const offBase = offs[ncy * nx + ncx];
+      for (let lj = 0; lj < nls; lj++) {
+        const rise = heights[offBase + lj] - hc;
+        if (rise > 26 || rise < -160) continue;      // 可上台阶, 允许跳落
+        const nk = base + lj;
+        if (seen[nk] === gen && ng >= g[nk]) continue;
+        seen[nk] = gen;
+        g[nk] = ng;
+        parent[nk] = ck;
+        heap.push(ng + hCost, nk);
+      }
+    }
+  }
+
+  // 被截断 (超时或堆未空却没找到目标) 时退回最接近目标的节点, 给调用方一条
+  // 尽量靠近的部分路径 —— 旧实现在这里静默返回 [], 导致 CT 永久卡在出生点。
+  const truncated = !found && (timedOut || heap.n > 0);
+  const endKey = found ? goalKey : (truncated ? bestKey : -1);
+  if (endKey < 0) { path.truncated = false; return path; }
+
+  const reversed = [];
+  for (let k = endKey; k !== -1; k = parent[k]) {
+    const li = k % maxL;
+    const cellIdx = (k - li) / maxL;
+    const cx = cellIdx % nx;
+    const cy = (cellIdx - cx) / nx;
+    reversed.push([cx, cy, li]);
+  }
+  for (let i = reversed.length - 1; i >= 0; i--) path.push(reversed[i]);
+  path.truncated = truncated;
+  return path;
+}
+
 
 // ---------------------------------------------------------------------------
 // 模型: 缓存 typed array 模板, 每次调用新建独立 BufferGeometry
@@ -636,34 +1081,85 @@ async function loadModelAssets(folder, name) {
   return name;
 }
 
+// 该格里最接近指定高度的层索引
+function nearestLayerIndexAt(cell, y) {
+  const n = layerCount(cell[0], cell[1]);
+  if (!n) return 0;
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(layerAt(cell[0], cell[1], i) - y);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
 // 出生点: GoldSrc [gsx, gsy(北), gsz(高), yaw] -> three [gsx, gsz, gsy],
 // 高度用 surfaceAt(cellOf(...), near=gsz-36) 吸附后 +1。
+//
+// 注意: nav 是"以格中心那一列"扫描出来的, 而原版出生点常常落在格子边角上
+// (de_dust2 的 3 个 T 出生点就在斜坡边缘, 距格心各 8 单位)。hull1 已按
+// 32x32x72 玩家盒膨胀, 因此格心可站不等于边角可站 —— 直接沿用原始 x/z 会让
+// 玩家碰撞盒插进斜坡, 表现为出生即卡在实体里。这里加一道 settleSpawn()
+// 校验: 站不进去就退回格心 (格心由 nav 烘焙保证可站)。
+function spawnFits(x, y, z) {
+  // y 是脚底; 检查玩家盒中段与头部都不与 hull1 相交
+  if (hullSolid(x, y + 36, z)) return false;
+  if (hullSolid(x, y + 68, z)) return false;
+  return true;
+}
+
+function settleSpawn(x, y, z, cellX, cellY, layerY) {
+  if (spawnFits(x, y, z)) return [x, y, z];
+  // 1) 同高度, 向格心收缩 (最多退到格心)
+  const cxp = NAV_WX0 + (cellX + 0.5) * CELL;
+  const czp = NAV_WY0 + (cellY + 0.5) * CELL;
+  for (let t = 0.25; t <= 1.0001; t += 0.25) {
+    const nx = x + (cxp - x) * t, nz = z + (czp - z) * t;
+    if (spawnFits(nx, y, nz)) return [nx, y, nz];
+  }
+  // 2) 格心 + 该格每一层高度都试一遍 (升序里取第一个能站的)
+  const ls = layers(cellX, cellY);
+  for (let i = 0; i < ls.length; i++) {
+    const hy = ls[i] + 1;
+    if (spawnFits(cxp, hy, czp)) return [cxp, hy, czp];
+  }
+  // 3) 都失败: 用格心 + 传入层高, 至少保证位置在可走格内
+  return [cxp, (layerY ?? y) + 1, czp];
+}
+
 function deriveSpawns(meta) {
   playerSpawns.length = 0;
   playerYaws.length = 0;
   tSpawns.length = 0;
   tYaws.length = 0;
+  let settled = 0;
   const convert = (s, out, yaws) => {
     const gsx = s[0], gsy = s[1], gsz = s[2], yaw = s[3];
     const [cx, cy] = cellOf(gsx, gsy);
     const ls = layers(cx, cy);
     if (ls.length) {
-      out.push([gsx, (surfaceAt(cx, cy, gsz - 36) ?? gsz) + 1, gsy]);
+      const layerY = surfaceAt(cx, cy, gsz - 36) ?? gsz;
+      const p = settleSpawn(gsx, layerY + 1, gsy, cx, cy, layerY);
+      if (p[0] !== gsx || p[2] !== gsy) settled++;
+      out.push(p);
     } else {
       const [nx, ny] = nearestOpen(cx, cy);
       const nls = layers(nx, ny);
-      const h = (nls.length ? (surfaceAt(nx, ny, gsz - 36) ?? gsz) : gsz) + 1;
+      const layerY = nls.length ? (surfaceAt(nx, ny, gsz - 36) ?? gsz) : gsz;
       // 孤岛出生点收进最近可站立格 (留出玩家半宽)
       const bx = Math.min(Math.max(gsx, NAV_WX0 + nx * CELL + PLAYER_HALF),
         NAV_WX0 + (nx + 1) * CELL - PLAYER_HALF);
       const bz = Math.min(Math.max(gsy, NAV_WY0 + ny * CELL + PLAYER_HALF),
         NAV_WY0 + (ny + 1) * CELL - PLAYER_HALF);
-      out.push([bx, h, bz]);
+      const p = settleSpawn(bx, layerY + 1, bz, nx, ny, layerY);
+      if (p[0] !== bx || p[2] !== bz) settled++;
+      out.push(p);
     }
     yaws.push(yaw);   // 玩家 rotation_y = 90 - yaw
   };
   for (const s of meta.ct_spawns || []) convert(s, playerSpawns, playerYaws);
   for (const s of meta.t_spawns || []) convert(s, tSpawns, tYaws);
+  if (settled) console.info(`[asset] ${settled} 个出生点与玩家碰撞盒冲突, 已吸附到可站立格`);
 }
 
 // ---------------------------------------------------------------------------
@@ -721,7 +1217,13 @@ export async function loadAll(onProgress = null) {
   colState = colBuf ? parseCol(colBuf) : null;
   hitState = hitBuf ? parseHit(hitBuf) : null;
   nearCache.clear();
+  clearPathCache();
   deriveSpawns(meta);
+  // 把两个包点登记成热点寻路目标 (bot 拆弹/进攻时会反复查询), 并立刻预建流场。
+  // 此时还在加载界面后面, 26 ms 的开销用户看不到。
+  registerFlowGoal(SITE_CELLS.A, nearestLayerIndexAt(SITE_CELLS.A, BOMB_SITES.A[1]));
+  registerFlowGoal(SITE_CELLS.B, nearestLayerIndexAt(SITE_CELLS.B, BOMB_SITES.B[1]));
+  warmFlowGoals();
 
   const worldMeshes = geoBuf ? buildWorldMeshes(geoBuf, meta, worldTex) : [];
   const sky = {};

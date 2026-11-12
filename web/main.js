@@ -2,7 +2,7 @@
 // 静态服务器以「项目根目录」为根: /web/index.html, /assets/..., /sfx_*.wav, /radar_v2.png
 // asset.js 里的 ROOT='../' / ASSET='../assets/' 相对模块 URL 解析, 无需 import map。
 import * as A from './asset.js';
-import { S, clamp, fmtTime, play, showCenter } from './state.js';
+import { S, clamp, fmtTime, play, showCenter, setSensitivity } from './state.js';
 import { initEngine, updateEngine, renderFrame, shoot } from './engine.js';
 import {
   initGame, updateGame, nextRound, toggleBuyMenu, buyItem,
@@ -239,7 +239,7 @@ function initHUD() {
   wrapHook('toggleBuy', open => syncBuyUI(!!open));
   wrapHook('buy', () => { setText(D.buyMoney, `$ ${S.money}`); });
 
-  setText(D.slotText, '1 主武器 2 手枪 3 匕首 | G 手雷 F 闪光 | E 拆弹 | B 购买 | Tab 计分 | ESC 退出');
+  setText(D.slotText, '1 主武器 2 手枪 3 匕首 | G 手雷 F 闪光 | E 拆弹 | B 购买 | [ ] 灵敏度 | Tab 计分 | ESC 退出');
   setText(D.sbHint, '松开 Tab 关闭');
   setText(D.buyTitle, '— 购买装备 —');
   refreshAmmo();
@@ -254,15 +254,23 @@ function initHUD() {
 // ---------------------------------------------------------------------------
 // AWP 开镜
 // ---------------------------------------------------------------------------
+// 灵敏度是"倍率": 开镜时降到 base * 0.4 (AWP 需要更精细的微调), 关镜恢复用户值。
+const SCOPE_SENS_SCALE = 0.4;
+
+function applySensitivity(scoped) {
+  const base = Number.isFinite(S.player.sensitivityBase) ? S.player.sensitivityBase : 2.0;
+  S.player.sensitivity = scoped ? base * SCOPE_SENS_SCALE : base;
+}
+
 function setScope(on) {
   const active = !!on && S.weapon === 'awp' && !S.player.dead;
   if (active === !!S.scoped) {
-    S.player.sensitivity = active ? 12 : 40;
+    applySensitivity(active);
     return;
   }
   S.scoped = active;
   S.player.scoped = active;
-  S.player.sensitivity = active ? 12 : 40;
+  applySensitivity(active);
   if (active) play('reload');          // 与原版一致: 开镜用咔哒声
 }
 
@@ -522,7 +530,7 @@ function updateHUD() {
   if (S.scoped && (S.weapon !== 'awp' || p.dead)) setScope(false);
   show(D.crosshair, !S.scoped && !S.buyMenuOpen && !p.dead);
   show(D.scopeOverlay, !!S.scoped && S.weapon === 'awp');
-  S.player.sensitivity = S.scoped ? 12 : 40;
+  S.player.sensitivity = S.scoped ? S.player.sensitivityBase * SCOPE_SENS_SCALE : S.player.sensitivityBase;
 
   // Q 上一把武器: 记录武器切换历史 (包括购买 / 阵亡引起的切换)
   if (shownWeapon !== S.weapon) {
@@ -547,6 +555,7 @@ const ALIAS = {
   Space: 'space', KeyE: 'e', KeyR: 'r', KeyB: 'b',
   KeyG: 'g', KeyF: 'f', KeyQ: 'q', Tab: 'tab',
   Digit1: '1', Digit2: '2', Digit3: '3',
+  BracketLeft: '[', BracketRight: ']',
   ArrowUp: 'arrowup', ArrowDown: 'arrowdown',
   ArrowLeft: 'arrowleft', ArrowRight: 'arrowright',
 };
@@ -659,6 +668,13 @@ function initInput() {
 
     if (code === 'KeyE') { S.defuseHeld = true; return; }
     if (code === 'KeyR') { reloadWeapon(); return; }
+    // 鼠标灵敏度: [ 降低 / ] 提高 (每档 20%), 右下角 HUD 会显示当前倍率
+    if (code === 'BracketLeft' || code === 'BracketRight') {
+      const cur = Number.isFinite(S.player.sensitivityBase) ? S.player.sensitivityBase : 2.0;
+      const next = setSensitivity(code === 'BracketLeft' ? cur * 0.8 : cur * 1.2);
+      showCenter(`鼠标灵敏度 ${next.toFixed(2)}`, '#b4d2ff', 1.0);
+      return;
+    }
     if (code === 'Digit1') {
       // 主武器: 与原版一致, AWP 优先于 AK-47; 都没买则无动作
       if (S.owned.awp) selectWeapon('awp');

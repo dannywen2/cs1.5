@@ -168,6 +168,10 @@ def main():
           "tris", sum(g["ntris"] for g in meta_groups))
 
     # ---- 碰撞 hull1 ----
+    # 注意: 世界树只包含 model 0 (worldspawn)。原版把 func_breakable 箱子/木箱
+    # 放在独立的 brush model 里 (models[1..] 各自有自己的 headnode), 因此只导出
+    # model 0 会让所有箱子变成"能穿过去"。这里把每个实心 brush 实体的 hull1
+    # 根节点 + 包围盒一起追加到文件尾部 (格式 v2), 由浏览器逐棵点测试。
     models = b.models()
     headnode = models[0]["headnode"][1]      # hull 1 = 玩家碰撞
     planes = b.planes()
@@ -176,10 +180,41 @@ def main():
     for i, (pn, c0, c1) in enumerate(clips):
         nx, ny, nz = planes[pn][0]
         col.append(struct.pack("<ffffhh", nx, ny, nz, planes[pn][1], c0, c1))
+
+    ents = b.entities()
+    # func_illusionary 在原版就是"看得见但不挡人"(栏杆/装饰), 不能加碰撞;
+    # func_bomb_target / func_buyzone 是触发区域, 也不是实体面。
+    SOLID_BRUSH = {"func_breakable", "func_wall", "func_door", "func_door_rotating",
+                   "func_button", "func_pushable"}
+    brushes = []
+    for e in ents:
+        cn = e.get("classname")
+        if cn not in SOLID_BRUSH:
+            continue
+        mdl = e.get("model", "")
+        if not mdl.startswith("*"):
+            continue
+        mi = int(mdl[1:])
+        if mi <= 0 or mi >= len(models):
+            continue
+        m = models[mi]
+        h1 = m["headnode"][1]
+        if h1 < 0:
+            continue                         # 该 brush 的 hull1 是叶子(空/全实), 无树可测
+        mn, mx = list(m["mins"]), list(m["maxs"])
+        # hull1 已按 32x32x72 玩家盒膨胀, 但点测试仍只在 brush 附近的点命中,
+        # 用 hull0 包围盒向外扩 40 做快速剔除界。
+        brushes.append((h1, mn, mx, mi, cn))
+    col.append(struct.pack("<i", len(brushes)))
+    for h1, mn, mx, mi, cn in brushes:
+        col.append(struct.pack("<i6f", h1, mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]))
     (OUT / "dust2.col").write_bytes(b"".join(col))
-    print("clipnodes", len(clips), "headnode", headnode)
+    print("clipnodes", len(clips), "headnode", headnode,
+          "solid brushes", len(brushes), "->", [b[3] for b in brushes])
 
     # ---- 点碰撞 hull0: 渲染 BSP 节点树 (无玩家盒膨胀), 供子弹/视线精确命中 ----
+    # 同上: 箱子等 brush 实体的 hull0 子树虽然物理上已经在 nodes lump 里,
+    # 但从 model 0 的根节点走不到, 所以子弹/视线也会穿箱。追加各自的根节点。
     rn = b.nodes()
     rl = b.leaves()
     hit = [struct.pack("<iiii", models[0]["headnode"][0],
@@ -189,8 +224,18 @@ def main():
     for nd in rn:
         hit.append(struct.pack("<ihh", nd["plane"], *nd["children"]))
     hit.append(struct.pack("<%di" % len(rl), *(l["contents"] for l in rl)))
+    hit_brushes = []
+    for h1, mn, mx, mi, cn in brushes:
+        h0 = models[mi]["headnode"][0]
+        if h0 < 0:
+            continue
+        hit_brushes.append((h0, mn, mx, mi, cn))
+    hit.append(struct.pack("<i", len(hit_brushes)))
+    for h0, mn, mx, mi, cn in hit_brushes:
+        hit.append(struct.pack("<i6f", h0, mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]))
     (OUT / "dust2.hit").write_bytes(b"".join(hit))
-    print("hit nodes", len(rn), "leaves", len(rl), "bytes",
+    print("hit nodes", len(rn), "leaves", len(rl),
+          "brushes", len(hit_brushes), "bytes",
           (OUT / "dust2.hit").stat().st_size)
 
     # ---- 实体 ----
