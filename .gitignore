@@ -1,0 +1,14 @@
+# Python 运行残留
+__pycache__/
+*.pyc
+
+# 工具缓存 / 编辑器数据
+.codegraph/
+.workbuddy/
+
+# 第三方安装工具（658MB 二进制，不入库：WiseUnpacker、cs15_test.exe 等）
+_tools/
+
+# 系统文件
+Thumbs.db
+desktop.ini

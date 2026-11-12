@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>CS 1.5 复刻版 - three.js</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- ===================== HUD ===================== -->
+<div id="hud">
+
+  <div id="hud-top-left" class="panel">
+    <div id="kill-text">击杀: 0</div>
+    <div id="round-text">回合 1</div>
+    <div id="enemy-text">敌人: 0</div>
+    <div id="side-text">CT  防守</div>
+    <div id="ally-text">队友: 0</div>
+  </div>
+
+  <div id="hud-bottom-left" class="panel">
+    <div id="kit-text">拆弹钳  无 (10s)</div>
+    <div id="armor-text">AP 0</div>
+    <div id="money-text">$ 800</div>
+    <div id="hp-text">HP 100</div>
+  </div>
+
+  <div id="hud-top-center" class="panel">
+    <div id="timer-text">1:45</div>
+    <div id="objective-text">阻止 T 安放 C4</div>
+  </div>
+
+  <div id="hud-bottom-center">
+    <div id="slot-text">1 主武器 2 手枪 3 匕首 | G 手雷 F 闪光 | E 拆弹 | B 购买 | Tab 计分 | ESC 退出</div>
+  </div>
+
+  <div id="hud-bottom-right" class="panel">
+    <div id="nade-text">HE x0  闪 x0</div>
+    <div id="weapon-text">USP</div>
+    <div id="ammo-text">12 / 36</div>
+  </div>
+
+  <div id="crosshair" class="hidden">
+    <div class="line ch-up"></div>
+    <div class="line ch-down"></div>
+    <div class="line ch-left"></div>
+    <div class="line ch-right"></div>
+  </div>
+
+  <div id="radar">
+    <canvas id="radar-canvas" width="200" height="200"></canvas>
+  </div>
+
+  <div id="radio" class="toast hidden"></div>
+  <div id="killfeed" class="toast hidden"></div>
+  <div id="hit-text" class="toast hidden"></div>
+  <div id="center-text" class="toast hidden"></div>
+  <div id="reload-text" class="toast hidden">换弹中...</div>
+  <div id="spectate-text" class="toast hidden"></div>
+
+  <div id="defuse-hint" class="toast hidden"></div>
+  <div id="defuse-bar-bg" class="hidden"><div id="defuse-bar"></div></div>
+
+  <div id="pointer-hint" class="hidden">点击锁定鼠标 | ESC 退出</div>
+
+  <!-- 计分板 -->
+  <div id="scoreboard" class="hidden">
+    <div id="sb-title">计分板</div>
+    <div id="sb-body"></div>
+    <div id="sb-hint">松开 Tab 关闭</div>
+  </div>
+
+  <!-- 购买菜单 -->
+  <div id="buy-menu" class="hidden">
+    <div id="buy-title">— 购买装备 —</div>
+    <div id="buy-money">$ 800</div>
+    <button type="button" data-buy="ak47">AK-47   $2500</button>
+    <button type="button" data-buy="awp">AWP   $4750</button>
+    <button type="button" data-buy="armor">凯夫拉护甲 (减伤50%)   $650</button>
+    <button type="button" data-buy="kit">拆弹钳 (拆弹 5s)   $200</button>
+    <button type="button" data-buy="he">HE 手雷 (G 投掷)   $300</button>
+    <button type="button" data-buy="flash">闪光弹 (F 投掷)   $200</button>
+    <button type="button" data-buy="ammo">补满所有弹药   $300</button>
+    <div class="buy-hint">按 B 关闭</div>
+  </div>
+
+  <!-- AWP 狙击镜 -->
+  <div id="scope-overlay" class="hidden">
+    <div class="bar top"></div>
+    <div class="bar bottom"></div>
+    <div class="bar left"></div>
+    <div class="bar right"></div>
+    <div class="scope-ring"></div>
+    <div class="line-h"></div>
+    <div class="line-v"></div>
+  </div>
+
+  <div id="red-flash"></div>
+  <div id="white-flash"></div>
+</div>
+
+<!-- ===================== 加载 ===================== -->
+<div id="loading" class="overlay">
+  <h1>CS 1.5 复刻版 - three.js</h1>
+  <p class="sub">DE_DUST2  ·  爆破模式  ·  CT 防守</p>
+  <div id="bar-bg"><div id="bar"></div></div>
+  <div id="load-label">正在加载原版资源...</div>
+</div>
+
+<!-- ===================== 开始 ===================== -->
+<div id="start" class="overlay hidden">
+  <h1>CS 1.5 复刻版</h1>
+  <div class="help">
+    <div>WASD 移动 &nbsp;·&nbsp; Shift 静步 &nbsp;·&nbsp; Ctrl 蹲伏 &nbsp;·&nbsp; 空格 跳跃</div>
+    <div>鼠标左键 射击 &nbsp;·&nbsp; 鼠标右键 AWP 开镜(按住) &nbsp;·&nbsp; R 换弹</div>
+    <div>1 / 2 / 3 主武器 / 手枪 / 匕首 &nbsp;·&nbsp; Q 上一把武器</div>
+    <div>G HE 手雷 &nbsp;·&nbsp; F 闪光弹 &nbsp;·&nbsp; E 按住拆弹 &nbsp;·&nbsp; B 购买菜单</div>
+    <div>Tab 计分板 &nbsp;·&nbsp; ESC 退出鼠标锁定</div>
+    <div class="help-dim">你是 CT：阻止 T 安放 C4，或按住 E 拆除已安放的 C4</div>
+  </div>
+  <button id="start-btn" type="button">点击进入战场</button>
+  <p class="sub">点击后浏览器会锁定鼠标并启用音频</p>
+</div>
+
+<div id="fatal" class="hidden"></div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

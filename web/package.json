@@ -1,0 +1,10 @@
+{
+  "name": "cs15-threejs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CS 1.5 复刻版 three.js/WebGL 移植，纯静态、无构建步骤",
+  "scripts": {
+    "start": "python ../serve.py"
+  }
+}

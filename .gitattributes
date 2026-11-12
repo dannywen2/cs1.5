@@ -1,0 +1,19 @@
+# 文本文件统一 LF
+* text=auto
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+
+# 二进制资产不做任何转换
+*.png binary
+*.wav binary
+*.ttf binary
+*.geo binary
+*.col binary
+*.nav binary
+*.hit binary
+*.exe binary
+*.zip binary
