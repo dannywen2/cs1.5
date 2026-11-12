@@ -1,6 +1,8 @@
-# Python 运行残留
+# Python 运行残留 / 本地服务器日志
 __pycache__/
 *.pyc
+serve.log
+serve.err
 
 # 工具缓存 / 编辑器数据
 .codegraph/

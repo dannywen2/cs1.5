@@ -79,7 +79,11 @@ class Bsp:
         offs = list(struct.unpack_from("<%di" % count, data, 4))
         out = []
         for o in offs:
-            if o == -1 or o >= len(data) - 40:
+            # miptex_t 固定 40 字节; 最后一个贴图恰好紧贴 lump 末尾时
+            # (o + 40 == len(data)) 仍是合法的, 旧判断 o >= len(data)-40
+            # 会把它误判成越界返回 None, 导致该贴图的所有面被整组丢弃
+            # (de_dust2 索引 43 SandWllWndw 即如此, A 点 67 个面缺失)。
+            if o < 0 or o + 40 > len(data):
                 out.append(None)
                 continue
             name = data[o:o + 16].split(b"\0")[0].decode("latin-1")
