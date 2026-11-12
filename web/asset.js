@@ -487,6 +487,98 @@ export function hitSolid(x, y, z) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// hull0 精确射线求交 (返回进入实体的 t, 未命中返回 -1)
+//
+// 旧实现按 8 单位步长采样 hitSolid, 命中后用 t-4 当命中点。两个问题:
+//  1. 比 8 单位更薄的墙 (de_dust2 的窗框、门缝、栅栏) 会被整段跨过 ——
+//     采样点恰好落在墙两侧的空腔里, 子弹直接穿过去打到后面的人。
+//  2. 命中点固定偏移 4 单位, 弹孔和伤害点都不在真实墙面上, 贴墙射击时
+//     会明显偏离准星。
+// 现在改成沿 BSP 平面做精确求交: 每个节点算射线与分割面的交点, 只在跨越
+// 平面时先近后远地递归两侧; 命中点就是真实入射点, 与墙厚无关。
+// 射线方向不必归一化, 但调用方传入的都是单位向量, 因此 t 即世界距离。
+// ---------------------------------------------------------------------------
+function traceBspSubtree(num, ox, oy, oz, dx, dy, dz, tEnter, tExit, best) {
+  const st = hitState;
+  // 用循环处理"近侧返回后继续走远侧"的情况, 避免递归爆炸
+  for (let guard = 0; guard < 512; guard++) {
+    if (num < 0) {
+      const leaf = -num - 1;
+      if (leaf >= 0 && leaf < st.nl && st.leaves[leaf] === -2) {
+        return tEnter < best ? tEnter : best;     // 进入实体叶
+      }
+      return best;                                // 空叶, 无命中
+    }
+    if (num >= st.nn) return best;
+    const b = st.plane[num] * 4;
+    if (b < 0 || b + 3 >= st.planes.length) return best;
+    // 平面方程沿用 hullSolid/hitSolid 的坐标映射: nx*x + ny*z + nz*y - dist
+    const pnx = st.planes[b], pny = st.planes[b + 1], pnz = st.planes[b + 2], pdist = st.planes[b + 3];
+    const sd = pnx * ox + pny * oz + pnz * oy - pdist;
+    const denom = pnx * dx + pny * dz + pnz * dy;
+    const c0 = st.c0[num], c1 = st.c1[num];        // c0: d>=0, c1: d<0
+
+    if (denom === 0) {                             // 射线与平面平行
+      num = sd >= 0 ? c0 : c1;
+      continue;
+    }
+    const tPlane = -sd / denom;
+    // 在 [tEnter, tExit] 内不跨越平面时, 用区间起点的符号选边
+    if (tPlane <= tEnter || tPlane >= tExit) {
+      const fEnter = sd + tEnter * denom;
+      num = fEnter >= 0 ? c0 : c1;
+      continue;
+    }
+    // 跨越: 先走近侧, 再带着收紧的区间走远侧
+    const nearChild = denom > 0 ? c1 : c0;         // denom>0 -> 起点在负侧
+    const farChild = denom > 0 ? c0 : c1;
+    best = traceBspSubtree(nearChild, ox, oy, oz, dx, dy, dz, tEnter, tPlane, best);
+    num = farChild;
+    tEnter = tPlane;
+  }
+  return best;
+}
+
+// 射线与 AABB 的入射参数 (slab 法); 不相交返回 -1
+function rayAabbEnter(ox, oy, oz, dx, dy, dz, mn, mx, tMax) {
+  let t0 = 0, t1 = tMax;
+  // mn/mx 是 (x, z, y) 顺序, 与 brush 包围盒一致
+  const o = [ox, oz, oy], d = [dx, dz, dy];
+  for (let a = 0; a < 3; a++) {
+    const mnv = mn[a], mxv = mx[a];
+    if (Math.abs(d[a]) < 1e-9) {
+      if (o[a] < mnv || o[a] > mxv) return -1;
+      continue;
+    }
+    let ta = (mnv - o[a]) / d[a], tb = (mxv - o[a]) / d[a];
+    if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return -1;
+  }
+  return t0;
+}
+
+// 世界树 + 全部 brush 子树, 返回最近的入射 t (无命中 -1)
+export function raySolidDistance(ox, oy, oz, dx, dy, dz, maxT) {
+  if (!hitState) return -1;
+  let best = maxT;
+  best = traceBspSubtree(hitState.head, ox, oy, oz, dx, dy, dz, 0, maxT, best);
+  if (best <= 0) return best;                      // 起点已在实体里
+  const br = hitState.brushes;
+  if (br && br.length) {
+    for (let k = 0; k < br.length; k++) {
+      const bb = br[k];
+      const enter = rayAabbEnter(ox, oy, oz, dx, dy, dz, bb.mins, bb.maxs, best);
+      if (enter < 0) continue;
+      best = traceBspSubtree(bb.root, ox, oy, oz, dx, dy, dz, enter, best, best);
+      if (best <= 0) return best;
+    }
+  }
+  return best < maxT ? best : -1;
+}
+
 // 3D 视线: 采样点必须落在有层的格内且不在 hull0 实体中
 export function gridClear(a, b, step = 8) {
   const dx = b.x - a.x, dz = b.z - a.z, dy = b.y - a.y;

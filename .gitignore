@@ -14,3 +14,8 @@ _tools/
 # 系统文件
 Thumbs.db
 desktop.ini
+
+# 未被引用的资源 (字体/版本标记): 保留在本地但不入库
+font_cn.ttf
+tex.ver
+sfx.ver

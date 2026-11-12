@@ -249,20 +249,18 @@ export function rayHit(originVec3, dirVec3, maxDist = A.BULLET_RANGE) {
     point: [o.x + d.x * entT, o.y + d.y * entT, o.z + d.z * entT],
     normal: entNormal,
   });
-  // Python _ray_hit: 8 单位步长扫描 hull0, 命中点取该步中点
-  const steps = Math.max(1, Math.ceil(maxT / 8));
-  for (let i = 1; i <= steps; i++) {
-    const t = Math.min(maxT, i * 8);
-    if (A.hitSolid(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t)) {
-      const wt = Math.max(0, t - 4);
-      if (entity && entT < wt) return entityResult();
-      return {
-        kind: 'wall', entity: null, normal: back,
-        point: [o.x + d.x * wt, o.y + d.y * wt, o.z + d.z * wt],
-      };
-    }
-    // 本段内没有墙: bot 盒比下一次采样更近则先命中 bot
-    if (entity && entT <= t) return entityResult();
+  // hull0 精确求交 (旧的 8 单位步长扫描会跨过比 8 单位更薄的墙 ——
+  // de_dust2 的窗框/门缝/栅栏, 而且命中点固定偏移 4 单位不贴墙面)。
+  // A.hitSolid 仍保留给视线/网格采样等"点测试"场景。
+  const wallT = typeof A.raySolidDistance === 'function'
+    ? A.raySolidDistance(o.x, o.y, o.z, d.x, d.y, d.z, maxT)
+    : -1;
+  if (wallT >= 0 && wallT <= maxT) {
+    if (entity && entT < wallT) return entityResult();
+    return {
+      kind: 'wall', entity: null, normal: back,
+      point: [o.x + d.x * wallT, o.y + d.y * wallT, o.z + d.z * wallT],
+    };
   }
   if (entity) return entityResult();
   return {
