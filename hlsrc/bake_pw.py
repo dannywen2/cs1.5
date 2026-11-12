@@ -19,8 +19,22 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = r'C:/GTGame/cs反恐精英1.5/cstrike/models'
 PLAYER = os.path.join(SRC, 'player', 'leet', 'leet.mdl')
 OUT = os.path.join(BASE, 'assets', 'player')
-WEAPONS = {'ak47': 'p_ak47.mdl', 'usp': 'p_usp.mdl',
-           'awp': 'p_awp.mdl', 'm4a1': 'p_m4a1.mdl', 'knife': 'p_knife.mdl'}
+WEAPONS = {
+    # 手枪
+    'glock18': 'p_glock18.mdl', 'usp': 'p_usp.mdl', 'p228': 'p_p228.mdl',
+    'deagle': 'p_deagle.mdl', 'elite': 'p_elite.mdl', 'fiveseven': 'p_fiveseven.mdl',
+    # 霰弹枪
+    'm3': 'p_m3.mdl', 'xm1014': 'p_xm1014.mdl',
+    # 冲锋枪
+    'tmp': 'p_tmp.mdl', 'mac10': 'p_mac10.mdl', 'mp5': 'p_mp5.mdl',
+    'ump45': 'p_ump45.mdl', 'p90': 'p_p90.mdl',
+    # 步枪
+    'ak47': 'p_ak47.mdl', 'm4a1': 'p_m4a1.mdl', 'sg552': 'p_sg552.mdl', 'aug': 'p_aug.mdl',
+    # 狙击枪
+    'scout': 'p_scout.mdl', 'awp': 'p_awp.mdl', 'g3sg1': 'p_g3sg1.mdl', 'sg550': 'p_sg550.mdl',
+    # 机枪 / 近战
+    'm249': 'p_m249.mdl', 'knife': 'p_knife.mdl',
+}
 
 
 def dot(a, b):

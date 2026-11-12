@@ -247,33 +247,76 @@ button { font: inherit; }
 #buy-menu {
   position: absolute;
   top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: clamp(340px, 32vw, 560px);
+  width: clamp(420px, 44vw, 720px);
+  max-height: 86vh;
   padding: clamp(14px, 1.8vw, 30px) clamp(14px, 2vw, 34px);
-  background: rgba(10, 20, 40, .82);
+  background: rgba(10, 20, 40, .90);
   border: 1px solid rgba(140, 180, 230, .55);
   border-radius: 6px;
   text-align: center;
   box-shadow: 0 8px 40px rgba(0, 0, 0, .75);
   pointer-events: auto;
+  display: flex;
+  flex-direction: column;
 }
 #buy-title { color: #ffdc78; font-size: 1.4em; font-weight: 700; }
-#buy-money { color: #78e678; font-size: 1.1em; margin: .25em 0 .9em; }
-#buy-menu button {
-  display: block;
-  width: 100%;
-  margin: clamp(4px, .5vh, 8px) 0;
-  padding: clamp(6px, .8vh, 12px) 10px;
+#buy-money { color: #78e678; font-size: 1.1em; margin: .25em 0 .7em; }
+
+/* 分类标签页 */
+#buy-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+  margin-bottom: .7em;
+  border-bottom: 1px solid rgba(130, 170, 230, .3);
+  padding-bottom: .6em;
+}
+#buy-tabs .tab {
+  padding: 3px 10px;
+  font-size: .92em;
+  color: #b4c8e0;
+  background: rgba(40, 58, 92, .8);
+  border: 1px solid rgba(120, 160, 220, .35);
+  border-radius: 3px;
+  cursor: pointer;
+}
+#buy-tabs .tab:hover { color: #fff; background: rgba(70, 100, 155, .9); }
+#buy-tabs .tab.active {
+  color: #06101c; background: #ffd678; border-color: #ffd678; font-weight: 700;
+}
+
+/* 物品网格 */
+#buy-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 5px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+#buy-items button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: clamp(5px, .7vh, 10px) 10px;
   color: #f0f6ff;
   background: rgba(50, 70, 110, .86);
   border: 1px solid rgba(130, 170, 230, .45);
   border-radius: 3px;
   cursor: pointer;
-  text-align: center;
-  font-size: 1em;
+  font-size: .95em;
   transition: background .12s, border-color .12s;
 }
-#buy-menu button:hover { background: rgba(80, 110, 170, .95); border-color: #b4d2ff; }
-#buy-menu button:active { background: rgba(110, 150, 220, .95); }
+#buy-items button:hover { background: rgba(80, 110, 170, .95); border-color: #b4d2ff; }
+#buy-items button:active { background: rgba(110, 150, 220, .95); }
+#buy-items button.cant { opacity: .42; cursor: not-allowed; }
+#buy-items button.cant:hover { background: rgba(50, 70, 110, .86); border-color: rgba(130, 170, 230, .35); }
+#buy-items .wname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#buy-items .wprice { color: #78e678; font-weight: 700; white-space: nowrap; }
+#buy-items .wtag {
+  font-size: .8em; color: #ffb45a; margin-left: .4em;
+}
 .buy-hint { color: rgba(255, 255, 255, .55); font-size: .88em; margin-top: .7em; }
 
 /* -------------------- 全屏闪白 / 闪红 -------------------- */

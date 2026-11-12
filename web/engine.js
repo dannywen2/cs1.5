@@ -516,19 +516,33 @@ export function shoot() {
 
   if (wp.melee) {
     S.shootCd = wp.interval;
-    play('knife');
     vmSwing = 1;
     const f = forwardVec(p.yaw, p.pitch);
     const hit = rayHit(origin, new THREE.Vector3(f[0], f[1], f[2]), A.MELEE_RANGE);
+    // CS 1.5 匕首: 正面砍 ~55, 背刺秒杀。背刺判定用攻击者与目标的朝向夹角。
     if (hit.kind === 'entity') {
       const e = hit.entity;
-      if (e.team === 'ct') showCenter('别打队友!', '#ff5050', 0.6);
-      else {
-        if (typeof e.takeDamage === 'function') e.takeDamage(wp.dmg, false, S.player.pos, '你');
-        play('hit');
+      if (e.team === 'ct') { showCenter('别打队友!', '#ff5050', 0.6); return; }
+      const bp = posOf(e.pos);
+      let backstab = false;
+      if (bp && Number.isFinite(e.yaw)) {
+        // 目标朝向 bot.yaw (度, 0 朝 +z); 攻击者相对目标的方位
+        const toAtk = Math.atan2(p.pos[0] - bp[0], p.pos[2] - bp[2]) * 180 / Math.PI;
+        let diff = ((toAtk - e.yaw) % 360 + 540) % 360 - 180;
+        backstab = Math.abs(diff) < 60;   // 攻击者在目标背后 120° 扇区
       }
+      play(backstab ? 'knife_stab' : 'knife');
+      const zone = backstab ? 'chest' : hitZoneOf(hit.point, bp);
+      const mult = backstab ? 4 : (A.HITBOX_MULT[zone] ?? 1);
+      if (typeof e.takeDamage === 'function') {
+        e.takeDamage(wp.dmg * mult, backstab, S.player.pos, '你', zone);
+      }
+      play('hit');
     } else if (hit.kind === 'wall') {
       addBulletHole(hit.point, hit.normal);
+      play('knife_hitwall');
+    } else {
+      play('knife');
     }
     return;
   }
@@ -537,7 +551,8 @@ export function shoot() {
   const ammo = S.ammo[S.weapon];
   if (!ammo) return;
   if (ammo[0] <= 0) {
-    play('empty');
+    // 空仓: 手枪是清脆的空击, 步枪是撞针声 (CS 1.5 分两种)
+    play(wp.kind === 'pistol' ? 'dryfire_pistol' : 'dryfire_rifle');
     S.shootCd = 0.3;
     if (!S.reloading && typeof S.hooks.reload === 'function') S.hooks.reload();
     return;
@@ -546,7 +561,7 @@ export function shoot() {
   hook('updateAmmo');
   S.shootCd = wp.interval;
   S.crossHeat = Math.min(S.crossHeat + 1, 3);
-  play(wp.sfx);
+  play(wp.sfx || 'fire_ak47');
   reportPlayer(S.player.pos);
 
   if (muzzle) {
@@ -560,30 +575,66 @@ export function shoot() {
   const spread = wp.spread * (S.scoped ? 0.3 : 1) * (shiftHeld() ? 2.5 : 1);
   const f = forwardVec(p.yaw, p.pitch);
   const r = rightVec(p.yaw);
-  _dir.set(f[0], f[1], f[2]);
   _fwd.set(f[0], f[1], f[2]);
   _right.set(r[0], r[1], r[2]);
   const up = new THREE.Vector3().crossVectors(_fwd, _right);
-  _dir.addScaledVector(_right, rand(-spread, spread));
-  _dir.addScaledVector(up, rand(-spread, spread));
-  _dir.normalize();
   p.pitch = clamp(p.pitch - wp.recoil * 0.5, -90, 90);
 
-  const hit = rayHit(origin, _dir, A.BULLET_RANGE);
-  if (hit.kind === 'entity') {
-    const e = hit.entity;
-    if (e.team === 'ct') {
-      showCenter('别打队友!', '#ff5050', 0.6);
-    } else {
-      const headshot = (hit.point[1] - (posOf(e.pos) || [0, 0, 0])[1]) > BOT_HEIGHT * 0.85;
-      const dmg = wp.dmg * (headshot ? 4 : 1);
-      if (typeof e.takeDamage === 'function') e.takeDamage(dmg, headshot, S.player.pos, '你');
-      play(headshot ? 'head' : 'hit');
-      hitText(headshot ? '爆头!' : '命中');
+  // 霰弹枪一次打多颗弹丸, 每颗独立散射 / 独立判定 (CS 1.5 的 pellets 机制)。
+  // 旧实现只发一条射线, 所以 M3 打不出"一枪糊脸"的效果。
+  const pellets = Math.max(1, wp.pellets | 0 || 1);
+  let anyEntity = false, anyHead = false, anyWall = null;
+  for (let i = 0; i < pellets; i++) {
+    _dir.set(f[0], f[1], f[2]);
+    if (spread > 0) {
+      _dir.addScaledVector(_right, rand(-spread, spread));
+      _dir.addScaledVector(up, rand(-spread, spread));
     }
-  } else if (hit.kind === 'wall') {
-    addBulletHole(hit.point, hit.normal);
+    _dir.normalize();
+
+    const hit = rayHit(origin, _dir, A.BULLET_RANGE);
+    if (hit.kind === 'entity') {
+      const e = hit.entity;
+      if (e.team === 'ct') {
+        if (!anyEntity) showCenter('别打队友!', '#ff5050', 0.6);
+        anyEntity = true;
+        continue;
+      }
+      // 按命中高度判定部位, 应用 CS 1.5 的部位倍率与距离衰减
+      const zone = hitZoneOf(hit.point, posOf(e.pos));
+      const mult = A.HITBOX_MULT[zone] ?? 1;
+      const travelled = dist3(p.pos, hit.point);
+      const falloff = Math.max(0.4, 1 - travelled * (1 - (wp.range_mod ?? 0.98)) * 0.02);
+      const dmg = wp.dmg * mult * falloff;
+      if (typeof e.takeDamage === 'function') {
+        e.takeDamage(dmg, zone === 'head', S.player.pos, '你', zone);
+      }
+      anyEntity = true;
+      if (zone === 'head') anyHead = true;
+    } else if (hit.kind === 'wall') {
+      anyWall = hit;
+    }
   }
+
+  if (anyEntity) {
+    play(anyHead ? 'head' : 'hit');
+    hitText(anyHead ? '爆头!' : '命中');
+  } else if (anyWall) {
+    addBulletHole(anyWall.point, anyWall.normal);
+    // 击中墙体: 溅射音 + 材质音
+    play(Math.random() < 0.5 ? 'ric1' : 'ric2');
+  }
+}
+
+// 命中部位: 用命中点相对 bot 脚底的高度分段 (CS 1.5 的 hitbox 比例:
+// 头 ~0.85-1.0, 胸腹 ~0.5-0.85, 腿 0-0.5)
+function hitZoneOf(point, feet) {
+  if (!point || !feet) return 'chest';
+  const rel = (point[1] - feet[1]) / BOT_HEIGHT;
+  if (rel >= 0.86) return 'head';
+  if (rel >= 0.55) return 'chest';
+  if (rel >= 0.42) return 'stomach';
+  return 'leg';
 }
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,40 @@ import mdl  # noqa: E402
 
 SRC = r'C:/GTGame/cs反恐精英1.5/cstrike/models'
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'vm')
-WEAPONS = {'usp': 'v_usp.mdl', 'ak47': 'v_ak47.mdl', 'awp': 'v_awp.mdl', 'knife': 'v_knife.mdl'}
+
+# CS 1.5 完整武器表 (不含 galil / famas, 那是 1.6 才加入的)。
+# 名字与 web/asset.js 的 WEAPONS 表一一对应。
+WEAPONS = {
+    # 手枪
+    'glock18':   'v_glock18.mdl',
+    'usp':       'v_usp.mdl',
+    'p228':      'v_p228.mdl',
+    'deagle':    'v_deagle.mdl',
+    'elite':     'v_elite.mdl',
+    'fiveseven': 'v_fiveseven.mdl',
+    # 霰弹枪
+    'm3':        'v_m3.mdl',
+    'xm1014':    'v_xm1014.mdl',
+    # 冲锋枪
+    'tmp':       'v_tmp.mdl',
+    'mac10':     'v_mac10.mdl',
+    'mp5':       'v_mp5.mdl',
+    'ump45':     'v_ump45.mdl',
+    'p90':       'v_p90.mdl',
+    # 步枪
+    'ak47':      'v_ak47.mdl',
+    'm4a1':      'v_m4a1.mdl',
+    'sg552':     'v_sg552.mdl',
+    'aug':       'v_aug.mdl',
+    # 狙击枪
+    'scout':     'v_scout.mdl',
+    'awp':       'v_awp.mdl',
+    'g3sg1':     'v_g3sg1.mdl',
+    'sg550':     'v_sg550.mdl',
+    # 机枪 / 近战
+    'm249':      'v_m249.mdl',
+    'knife':     'v_knife.mdl',
+}
 
 # 只按贴图名精确匹配手/前臂蒙皮。'handle.bmp'(握把/机匣)、'bolt_handle.bmp'(枪机柄)、
 # 'forearm.bmp'(AK 木质护木) 都是枪械部件, 绝对不能被 'hand' 子串误伤。

@@ -37,30 +37,204 @@ export const BASE_FOV = 90;
 // 上下各 36)。导出的 brush 包围盒是原始盒, 点测试前必须按这个量放大。
 export const HULL1_PAD = 36;
 
+// ---------------------------------------------------------------------------
+// CS 1.5 武器表
+//
+// 数值取自 CS 1.5 / 1.6 的 weapon_*.cpp 硬编码值 (两者武器数值一致, 1.6 只是
+// 加了 galil/famas 并调了少数价格)。字段说明:
+//   dmg        基础伤害 (未计部位倍率与护甲)
+//   pellets    每次射击弹丸数 (霰弹枪 > 1)
+//   interval   射击间隔秒 (60/rpm)
+//   clip/reserve  弹匣容量 / 备弹
+//   spread     腰射基础散布 (弧度)
+//   recoil     每发上抬的后坐 (度)
+//   armor_ratio 有甲时伤害保留比例 (0.5 = 护甲吸收一半)
+//   range_mod  远距离伤害衰减系数 (每单位距离)
+//   team       't' | 'ct' | null (null = 双方都能买)
+//   slot       1=主武器 2=手枪 3=刀
+//   price      购买价; kill_reward 击杀奖励
+// ---------------------------------------------------------------------------
 export const WEAPONS = {
-  knife: { name: '匕首', dmg: 55, interval: 0.45, clip_size: null, reserve: null, recoil: 0.5, spread: 0, price: 0, kill_reward: 1500, melee: true, sfx: 'knife' },
-  usp: { name: 'USP', dmg: 24, interval: 0.28, clip_size: 12, reserve: 36, recoil: 1, spread: 0.012, price: 0, kill_reward: 300, melee: false, sfx: 'shot', auto: false },
-  ak47: { name: 'AK-47', dmg: 32, interval: 0.10, clip_size: 30, reserve: 90, recoil: 1.6, spread: 0.020, price: 2500, kill_reward: 300, melee: false, sfx: 'shot', auto: true },
-  awp: { name: 'AWP', dmg: 115, interval: 1.30, clip_size: 10, reserve: 30, recoil: 3.5, spread: 0.001, price: 4750, kill_reward: 100, melee: false, sfx: 'awp', auto: false, zoom: true },
+  // ---------------- 近战 ----------------
+  knife: {
+    name: '匕首', dmg: 55, pellets: 1, interval: 0.45, clip_size: null, reserve: null,
+    spread: 0, recoil: 0.5, armor_ratio: 0.5, range_mod: 1, price: 0, kill_reward: 1500,
+    melee: true, auto: false, slot: 3, team: null, sfx: 'knife', reload_sfx: null, kind: 'knife',
+  },
+
+  // ---------------- 手枪 ----------------
+  glock18: {
+    name: 'Glock-18', dmg: 25, pellets: 1, interval: 0.15, clip_size: 20, reserve: 120,
+    spread: 0.013, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 400, kill_reward: 300,
+    melee: false, auto: true, slot: 2, team: 't', sfx: 'fire_glock18', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+  usp: {
+    name: 'USP', dmg: 34, pellets: 1, interval: 0.15, clip_size: 12, reserve: 100,
+    spread: 0.010, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 500, kill_reward: 300,
+    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_usp', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+  p228: {
+    name: 'P228', dmg: 32, pellets: 1, interval: 0.15, clip_size: 13, reserve: 52,
+    spread: 0.011, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 600, kill_reward: 300,
+    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_p228', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+  deagle: {
+    name: 'Desert Eagle', dmg: 53, pellets: 1, interval: 0.30, clip_size: 7, reserve: 35,
+    spread: 0.012, recoil: 2.2, armor_ratio: 0.5, range_mod: 0.98, price: 650, kill_reward: 300,
+    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_deagle', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+  elite: {
+    name: '双 Beretta', dmg: 38, pellets: 1, interval: 0.10, clip_size: 15, reserve: 120,
+    spread: 0.013, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 1000, kill_reward: 300,
+    melee: false, auto: false, slot: 2, team: 't', sfx: 'fire_elite', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+  fiveseven: {
+    name: 'Five-SeveN', dmg: 27, pellets: 1, interval: 0.15, clip_size: 20, reserve: 100,
+    spread: 0.011, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 750, kill_reward: 300,
+    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_fiveseven', reload_sfx: 'reload_pistol', kind: 'pistol',
+  },
+
+  // ---------------- 霰弹枪 ----------------
+  m3: {
+    name: 'M3 Super90', dmg: 24, pellets: 9, interval: 0.85, clip_size: 8, reserve: 32,
+    spread: 0.045, recoil: 3.0, armor_ratio: 0.5, range_mod: 0.90, price: 1700, kill_reward: 900,
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_m3', reload_sfx: 'reload_shotgun', kind: 'shotgun',
+  },
+  xm1014: {
+    name: 'XM1014', dmg: 20, pellets: 6, interval: 0.30, clip_size: 7, reserve: 32,
+    spread: 0.050, recoil: 2.6, armor_ratio: 0.5, range_mod: 0.88, price: 3000, kill_reward: 900,
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_xm1014', reload_sfx: 'reload_shotgun', kind: 'shotgun',
+  },
+
+  // ---------------- 冲锋枪 ----------------
+  tmp: {
+    name: 'TMP', dmg: 20, pellets: 1, interval: 0.07, clip_size: 30, reserve: 120,
+    spread: 0.018, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 1250, kill_reward: 600,
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_tmp', reload_sfx: 'reload_smg', kind: 'smg',
+  },
+  mac10: {
+    name: 'MAC-10', dmg: 29, pellets: 1, interval: 0.07, clip_size: 30, reserve: 100,
+    spread: 0.020, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.94, price: 1400, kill_reward: 600,
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_mac10', reload_sfx: 'reload_smg', kind: 'smg',
+  },
+  mp5: {
+    name: 'MP5 Navy', dmg: 27, pellets: 1, interval: 0.08, clip_size: 30, reserve: 120,
+    spread: 0.017, recoil: 1.1, armor_ratio: 0.6, range_mod: 0.96, price: 1500, kill_reward: 600,
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_mp5', reload_sfx: 'reload_smg', kind: 'smg',
+  },
+  ump45: {
+    name: 'UMP45', dmg: 30, pellets: 1, interval: 0.09, clip_size: 25, reserve: 100,
+    spread: 0.017, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.96, price: 1700, kill_reward: 600,
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_ump45', reload_sfx: 'reload_smg', kind: 'smg',
+  },
+  p90: {
+    name: 'P90', dmg: 21, pellets: 1, interval: 0.07, clip_size: 50, reserve: 100,
+    spread: 0.016, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 2750, kill_reward: 600,
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_p90', reload_sfx: 'reload_smg', kind: 'smg',
+  },
+
+  // ---------------- 步枪 ----------------
+  ak47: {
+    name: 'AK-47', dmg: 36, pellets: 1, interval: 0.095, clip_size: 30, reserve: 90,
+    spread: 0.016, recoil: 1.7, armor_ratio: 0.775, range_mod: 0.98, price: 2500, kill_reward: 300,
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_ak47', reload_sfx: 'reload_rifle', kind: 'rifle',
+  },
+  m4a1: {
+    name: 'M4A1', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
+    spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3100, kill_reward: 300,
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_m4a1', reload_sfx: 'reload_rifle', kind: 'rifle',
+  },
+  sg552: {
+    name: 'SG552 Commando', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
+    spread: 0.016, recoil: 1.5, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_sg552', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true,
+  },
+  aug: {
+    name: 'AUG', dmg: 32, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
+    spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_aug', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true,
+  },
+
+  // ---------------- 狙击枪 ----------------
+  scout: {
+    name: 'Steyr Scout', dmg: 75, pellets: 1, interval: 0.65, clip_size: 10, reserve: 90,
+    spread: 0.001, recoil: 2.5, armor_ratio: 0.6, range_mod: 0.98, price: 2750, kill_reward: 300,
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_scout', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+  },
+  awp: {
+    name: 'AWP', dmg: 115, pellets: 1, interval: 1.45, clip_size: 10, reserve: 30,
+    spread: 0.001, recoil: 3.5, armor_ratio: 0.7, range_mod: 0.99, price: 4750, kill_reward: 100,
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_awp', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+  },
+  g3sg1: {
+    name: 'G3SG1', dmg: 80, pellets: 1, interval: 0.40, clip_size: 20, reserve: 90,
+    spread: 0.002, recoil: 2.6, armor_ratio: 0.7, range_mod: 0.98, price: 5000, kill_reward: 300,
+    melee: false, auto: false, slot: 1, team: 't', sfx: 'fire_g3sg1', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+  },
+  sg550: {
+    name: 'SG550', dmg: 70, pellets: 1, interval: 0.40, clip_size: 20, reserve: 90,
+    spread: 0.002, recoil: 2.4, armor_ratio: 0.7, range_mod: 0.98, price: 4200, kill_reward: 300,
+    melee: false, auto: false, slot: 1, team: 'ct', sfx: 'fire_sg550', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+  },
+
+  // ---------------- 机枪 ----------------
+  m249: {
+    name: 'M249', dmg: 32, pellets: 1, interval: 0.08, clip_size: 100, reserve: 200,
+    spread: 0.020, recoil: 1.6, armor_ratio: 0.7, range_mod: 0.97, price: 5750, kill_reward: 300,
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_m249', reload_sfx: 'reload_m249', kind: 'mg',
+  },
 };
 
-export const VM_SCALE = { usp: 0.10, ak47: 0.058, awp: 0.055, knife: 0.14 };
+// 部位伤害倍率 (CS 1.5 hitbox): 头 4x, 胸腹 1x, 手臂 0.5x, 腿 0.75x
+export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg: 0.75 };
+
+// 每把武器对应的第一人称枪模摆放 (位置/旋转/缩放), 与 bake_vm.py 的规范基配合。
+// 枪身越长 z 越小 (更靠前), 手枪贴近相机。
+export const VM_SCALE = {
+  knife: 0.14,
+  glock18: 0.11, usp: 0.11, p228: 0.115, deagle: 0.11, elite: 0.10, fiveseven: 0.115,
+  m3: 0.055, xm1014: 0.052,
+  tmp: 0.062, mac10: 0.062, mp5: 0.058, ump45: 0.056, p90: 0.058,
+  ak47: 0.058, m4a1: 0.055, sg552: 0.056, aug: 0.056,
+  scout: 0.050, awp: 0.055, g3sg1: 0.052, sg550: 0.048,
+  m249: 0.050,
+};
 export const VM_POS = {
-  usp: [0.72, 0.02, 1.0],
-  ak47: [0.70, -0.22, 1.5],
-  awp: [0.68, -0.20, 1.45],
   knife: [0.72, -0.18, 1.0],
+  glock18: [0.68, 0.00, 0.95], usp: [0.72, 0.02, 1.0], p228: [0.70, 0.01, 0.98],
+  deagle: [0.70, 0.00, 1.0], elite: [0.66, 0.00, 0.95], fiveseven: [0.70, 0.01, 0.98],
+  m3: [0.66, -0.24, 1.65], xm1014: [0.66, -0.24, 1.70],
+  tmp: [0.68, -0.16, 1.20], mac10: [0.68, -0.16, 1.18], mp5: [0.68, -0.18, 1.32],
+  ump45: [0.68, -0.19, 1.36], p90: [0.68, -0.17, 1.28],
+  ak47: [0.70, -0.22, 1.5], m4a1: [0.69, -0.21, 1.5], sg552: [0.70, -0.22, 1.5], aug: [0.69, -0.21, 1.48],
+  scout: [0.67, -0.20, 1.6], awp: [0.68, -0.20, 1.45], g3sg1: [0.68, -0.21, 1.5], sg550: [0.68, -0.20, 1.52],
+  m249: [0.66, -0.25, 1.55],
 };
 // 角度 (度), 由 Three.js 侧转成弧度
 export const VM_ROT = {
-  usp: [0, -15, 15],
-  ak47: [-6, -15, 12],
-  awp: [-4, -15, 12],
   knife: [0, -15, 12],
+  glock18: [0, -15, 14], usp: [0, -15, 15], p228: [0, -15, 14],
+  deagle: [0, -15, 14], elite: [0, -15, 13], fiveseven: [0, -15, 14],
+  m3: [-5, -15, 12], xm1014: [-5, -15, 12],
+  tmp: [-4, -15, 12], mac10: [-4, -15, 12], mp5: [-5, -15, 12],
+  ump45: [-5, -15, 12], p90: [-4, -15, 12],
+  ak47: [-6, -15, 12], m4a1: [-6, -15, 12], sg552: [-6, -15, 12], aug: [-6, -15, 12],
+  scout: [-4, -15, 12], awp: [-4, -15, 12], g3sg1: [-5, -15, 12], sg550: [-5, -15, 12],
+  m249: [-6, -15, 12],
 };
 export const VM_GAIN = 1.55;
 export const PLAYER_MODELS = { t: ['leet', 'terror'], ct: ['sas', 'urban'] };
-export const BOT_WEAPONS = { t: ['w_ak47', 'w_awp'], ct: ['w_m4a1', 'w_usp'] };
+
+// bot 手上的枪: 按队伍与武器槽随机取, 全部来自烘焙好的 w_* 资源
+export const BOT_WEAPONS = {
+  t: ['w_glock18', 'w_deagle', 'w_mp5', 'w_ak47', 'w_sg552', 'w_awp'],
+  ct: ['w_usp', 'w_p228', 'w_mp5', 'w_m4a1', 'w_aug', 'w_awp'],
+};
+// bot 随机携带的武器 id (与 WEAPONS 对应, 用于伤害判定)
+export const BOT_ARSENAL = {
+  t: ['glock18', 'deagle', 'mp5', 'ak47', 'sg552', 'awp'],
+  ct: ['usp', 'p228', 'mp5', 'm4a1', 'aug', 'awp'],
+};
 
 // 天空盒六面, pos/rot 均为普通数组 (rot 单位为度)
 export const SKY_KEYS = ['ft', 'bk', 'rt', 'lf', 'up', 'dn'];
@@ -86,12 +260,27 @@ export const BOMB_SITES = {
 };
 
 export const PLAYER_MODEL_NAMES = ['leet', 'terror', 'sas', 'urban',
-  'w_ak47', 'w_awp', 'w_m4a1', 'w_usp', 'w_knife'];
-export const VM_NAMES = ['usp', 'ak47', 'awp', 'knife'];
+  'w_glock18', 'w_usp', 'w_p228', 'w_deagle', 'w_elite', 'w_fiveseven',
+  'w_m3', 'w_xm1014', 'w_tmp', 'w_mac10', 'w_mp5', 'w_ump45', 'w_p90',
+  'w_ak47', 'w_m4a1', 'w_sg552', 'w_aug', 'w_scout', 'w_awp', 'w_g3sg1',
+  'w_sg550', 'w_m249', 'w_knife'];
+export const VM_NAMES = Object.keys(VM_SCALE);
 // 根目录 sfx_<key>.wav (见 hlsrc/bake_sound.py 的 MAP)
-export const SFX_NAMES = ['shot', 'awp', 'hit', 'head', 'kill', 'reload',
-  'hurt', 'empty', 'buy', 'win', 'lose', 'footstep', 'knife', 'explode',
-  'flash', 'pin', 'c4_beep', 'c4_plant', 'c4_defuse', 'radio', 'deploy'];
+export const SFX_NAMES = [
+  // 通用
+  'hit', 'head', 'kill', 'hurt', 'empty', 'buy', 'win', 'lose', 'footstep',
+  'explode', 'flash', 'pin', 'c4_beep', 'c4_plant', 'c4_defuse', 'radio', 'deploy',
+  // 每把武器的开火音 (CS 1.5 原版, AK 与 M4 是两套完全不同的枪声)
+  'fire_glock18', 'fire_usp', 'fire_p228', 'fire_deagle',
+  'fire_elite', 'fire_fiveseven', 'fire_m3', 'fire_xm1014', 'fire_tmp', 'fire_mac10',
+  'fire_mp5', 'fire_ump45', 'fire_p90', 'fire_ak47', 'fire_m4a1', 'fire_sg552',
+  'fire_aug', 'fire_scout', 'fire_awp', 'fire_g3sg1', 'fire_sg550', 'fire_m249',
+  // 换弹 / 材质 / 特殊
+  'reload_pistol', 'reload_rifle', 'reload_shotgun', 'reload_smg', 'reload_sniper',
+  'reload_m249', 'ric1', 'ric2', 'ric_metal', 'ric_conc', 'bullet_hit',
+  'dryfire_pistol', 'dryfire_rifle', 'zoom', 'knife_stab', 'knife_hitwall',
+  'he_bounce', 'grenade_hit', 'hegrenade',
+];
 
 // ---------------------------------------------------------------------------
 // 模块内状态: 由 loadAll 一次性装入, 其余导出函数全部同步读取

@@ -34,8 +34,9 @@ export const S = {
     speed: RUN_SPEED,
     hp: 100,
     armor: 0,
+    hasHelmet: false,
     hasKit: false,
-    nades: { he: 0, flash: 0 },
+    nades: { he: 0, flash: 0, smoke: 0 },
     dead: false,
     crouching: false,
     sensitivity: 2.0,        // 倍率 (每像素 0.06 度 x 倍率), 见 engine.js DEG_PER_COUNT
@@ -53,6 +54,7 @@ export const S = {
   stepTimer: 0,
   vmAnim: { t: 0, recoil: 0, dip: 0 },
   grenades: [],
+  smokes: [],
   debris: [],
 
   // ---- 经济 / 比分 ----

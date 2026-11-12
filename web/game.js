@@ -6,13 +6,45 @@ import { S, clamp, rand, randInt, choice, dist2, dist3, yawTo, fmtTime, play, sh
 import { makeBotMesh, addEntityMesh, removeEntityMesh, getCamera } from './engine.js';
 
 const DEG = Math.PI / 180;
-const GEAR = { armor: 650, he: 300, flash: 200, kit: 200 };
-const NADE_LIMIT = { he: 1, flash: 2 };
+// CS 1.5 装备价格 (armor 650 / 全套 1000 / kit 200 / 弹药 各自价格)
+const GEAR = { armor: 650, kevlarhelm: 1000, kit: 200 };
+const NADE_LIMIT = { he: 1, flash: 2, smoke: 1 };
 const BUY_WINDOW = 15;
+const MONEY_CAP = 16000;      // CS 1.5 资金上限
 const BUY_RADIUS = 400;
+
+// 购买菜单分类: 与 CS 1.5 的 buy 菜单一致 (1 手枪 / 2 霰弹 / 3 冲锋 / 4 步枪 /
+// 5 机枪 / 6 装备)。每项 [武器id 或装备id, 显示名]。队伍限制在 canBuyItem 里判。
+export const BUY_CATEGORIES = [
+  {
+    key: 'pistol', label: '手枪', ids: [
+      'glock18', 'usp', 'p228', 'deagle', 'elite', 'fiveseven',
+    ],
+  },
+  {
+    key: 'shotgun', label: '霰弹枪', ids: ['m3', 'xm1014'],
+  },
+  {
+    key: 'smg', label: '冲锋枪', ids: ['tmp', 'mac10', 'mp5', 'ump45', 'p90'],
+  },
+  {
+    key: 'rifle', label: '步枪', ids: ['ak47', 'm4a1', 'sg552', 'aug'],
+  },
+  {
+    key: 'sniper', label: '狙击枪', ids: ['scout', 'awp', 'g3sg1', 'sg550'],
+  },
+  {
+    key: 'heavy', label: '机枪', ids: ['m249'],
+  },
+  {
+    key: 'gear', label: '装备', ids: ['armor', 'kevlarhelm', 'kit', 'he', 'flash', 'ammo'],
+  },
+];
 const RELOAD_TIME = 1.6;
 const HE_RADIUS = 200;
 const FLASH_RADIUS = 320;
+const SMOKE_RADIUS = 150;     // CS 1.5 smokescreen 半径约 150 单位
+const SMOKE_TIME = 12;        // 持续约 12 秒
 const ALLY_COUNT = 4;
 
 let DEF_POSTS = [];
@@ -71,6 +103,7 @@ function syncScene() {
   for (const k of ['entity', 'led', 'drop']) attach(bombMeshes[k]);
   for (const o of S.grenades) attach(o && o.mesh);
   for (const o of S.debris) attach(o && o.mesh);
+  for (const o of S.smokes) attach(o && o.mesh);
 }
 
 function dropMesh(mesh) {
@@ -183,17 +216,21 @@ function computePosts() {
 // ---------------------------------------------------------------------------
 // Bot 视觉: makeBotMesh 每次都新建几何; 模型缺失时用简单占位, 绝不抛异常
 // ---------------------------------------------------------------------------
-function createVisual(team) {
+function createVisual(team, weaponId = null) {
   const models = (A.PLAYER_MODELS && A.PLAYER_MODELS[team]) || ['sas'];
-  const guns = (A.BOT_WEAPONS && A.BOT_WEAPONS[team]) || ['w_usp'];
+  const arsenal = (A.BOT_ARSENAL && A.BOT_ARSENAL[team]) || ['usp'];
+  const wid = weaponId && A.WEAPONS[weaponId] ? weaponId : choice(arsenal);
   try {
-    const v = makeBotMesh(choice(models), choice(guns));
+    // 让手上的模型与 weaponId 严格对应, 而不是各自随机 —— 否则 bot 举着 AWP
+    // 却打出 AK 的枪声和伤害。
+    const v = makeBotMesh(choice(models), 'w_' + wid);
     if (v && v.group) {
       if (!v.hpBar) v.hpBar = v.group.userData.hpBar || null;
       if (!v.flash) v.flash = v.group.userData.flash || null;
       if (typeof v.setHitFlash !== 'function') {
         v.setHitFlash = v.group.userData.setHitFlash || (() => {});
       }
+      v.weaponId = wid;
       return v;
     }
   } catch (e) {
@@ -272,7 +309,10 @@ class Bot {
     this.yaw = 0;              // 度, 与 state.js / yawTo 一致
     this.muzzleUntil = 0;
 
-    this.visual = createVisual(team);
+    // bot 的枪: 从本方军火库随机取一把, 与其手持模型/枪声/伤害保持一致
+    const arsenal = (A.BOT_ARSENAL && A.BOT_ARSENAL[team]) || ['usp'];
+    this.weaponId = choice(arsenal);
+    this.visual = createVisual(team, this.weaponId);
     addMesh(this.visual.group);
     // 背包式 C4: 只有携带者可见 (局部空间, 根组已缩放 32/72/32)
     this.pack = new THREE.Mesh(
@@ -501,7 +541,9 @@ class Bot {
       return;
     }
     this.fireTimer = rand(0.8, 1.5);
-    play('shot');
+    // 每把 bot 用自己的枪声与伤害 (CS 1.5 里 AWP 的枪声和 AK 完全不同)
+    const wstat = A.WEAPONS[this.weaponId] || A.WEAPONS.ak47;
+    play(wstat.sfx || 'fire_ak47');
     if (this.visual.flash) {
       this.visual.flash.visible = true;
       this.visual.flash.rotation.z = rand(0, Math.PI / 2);
@@ -509,18 +551,22 @@ class Bot {
     }
     const hitChance = Math.max(0.18, 0.82 - dist * 0.00065);
     if (Math.random() >= hitChance) return;
-    const dmg = randInt(6, 13);
+    // 伤害按武器基础值缩放 (bot 命中率已单独建模, 所以这里不叠部位倍率,
+    // 否则 AK 一发就能秒人, 手感会变成"子弹海绵"反过来的那种不合理)
+    const base = wstat.dmg * Math.max(1, wstat.pellets | 0 || 1) * 0.28;
+    const dmg = Math.max(3, Math.round(base * rand(0.75, 1.25)));
     if (!ent) {
-      damagePlayer(dmg);
+      damagePlayer(dmg, wstat.armor_ratio ?? 0.5);
     } else if (ent.team !== this.team && ent.enabled && ent.health > 0
       && typeof ent.takeDamage === 'function') {
       ent.takeDamage(dmg, false, this.pos, this.name);
     }
   }
 
-  takeDamage(dmg, headshot = false, fromPos = null, killer = '你') {
+  takeDamage(dmg, headshot = false, fromPos = null, killer = '你', zone = null) {
     if (!this.enabled) return;
     this.health -= finite(dmg);
+    this.hitZone = zone || (headshot ? 'head' : 'chest');
     if (this.team === 't' && fromPos) reportPlayer(fromPos);
     this.flash = 0.08;
     try { this.visual.setHitFlash(true); } catch (_) { /* 占位模型可忽略 */ }
@@ -541,7 +587,7 @@ class Bot {
     if (killer === '你') {
       S.score += 1;
       const wp = A.WEAPONS[S.weapon];
-      S.money += wp ? (wp.kill_reward || 0) : 0;
+      S.money = Math.min(MONEY_CAP, S.money + (wp ? (wp.kill_reward || 0) : 0));
     } else if (typeof killer === 'string' && killer.startsWith('CT')) {
       S.allyKills += 1;
     }
@@ -846,7 +892,7 @@ function clearListMeshes(list) {
 }
 
 export function throwNade(kind) {
-  if (kind !== 'he' && kind !== 'flash') return;
+  if (kind !== 'he' && kind !== 'flash' && kind !== 'smoke') return;
   if (S.buyMenuOpen || S.player.dead || S.BOMB.state === 'over') return;
   if (!S.player.nades[kind] || S.player.nades[kind] <= 0) return;
   S.player.nades[kind] -= 1;
@@ -860,9 +906,11 @@ export function throwNade(kind) {
   const eye = cam ? [cam.position.x, cam.position.y, cam.position.z]
     : [p.pos[0], p.pos[1] + A.EYE_HEIGHT, p.pos[2]];
   const pos = [eye[0] + fwd[0] * 12, eye[1] + fwd[1] * 12, eye[2] + fwd[2] * 12];
+  // CS 1.5 三种手雷颜色: HE 军绿 / 闪光 银白 / 烟雾 深灰
+  const col = kind === 'he' ? 0x465a3c : (kind === 'flash' ? 0xc8c8cd : 0x50565c);
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(2, 8, 6),
-    new THREE.MeshBasicMaterial({ color: kind === 'he' ? 0x465a3c : 0xc8c8cd }),
+    new THREE.MeshBasicMaterial({ color: col }),
   );
   mesh.position.set(pos[0], pos[1], pos[2]);
   addMesh(mesh);
@@ -873,9 +921,49 @@ export function throwNade(kind) {
   });
 }
 
+// 烟雾弹: 一团会膨胀并逐渐消散的烟球 (CS 1.5 的 smokescreen 是纯视觉遮挡)
+function smokePuff(pos) {
+  const radius = SMOKE_RADIUS;
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius * 0.5, 10, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0x9aa0a6, transparent: true, opacity: 0.78,
+      depthWrite: false, side: THREE.DoubleSide,
+    }),
+  );
+  mesh.position.set(pos[0], pos[1] + radius * 0.4, pos[2]);
+  mesh.renderOrder = 2;
+  addMesh(mesh);
+  S.smokes.push({ mesh, pos: [pos[0], pos[1], pos[2]], ttl: SMOKE_TIME, born: S.time, radius });
+}
+
+function updateSmokes(dt) {
+  for (let i = S.smokes.length - 1; i >= 0; i--) {
+    const s = S.smokes[i];
+    s.ttl -= dt;
+    if (!s.mesh) { S.smokes.splice(i, 1); continue; }
+    const age = S.time - s.born;
+    // 0.4s 内膨胀到满, 最后 2s 淡出
+    const grow = Math.min(1, age / 0.4);
+    const fade = Math.min(1, Math.max(0, s.ttl / 2));
+    s.mesh.scale.setScalar(0.4 + 0.6 * grow);
+    s.mesh.material.opacity = 0.78 * fade;
+    if (s.ttl <= 0) { dropMesh(s.mesh); S.smokes.splice(i, 1); }
+  }
+}
+
 function explodeNade(g) {
   const pos = g.pos;
   const eye = obj3([pos[0], pos[1], pos[2]]);
+  // 烟雾弹没有伤害/致盲, 单独走一条分支: 生成一团会消散的烟球
+  if (g.kind === 'smoke') {
+    play('he_bounce');                    // CS 1.5 烟雾弹落地的"噗"声
+    smokePuff(pos);
+    dropMesh(g.mesh);
+    const si = S.grenades.indexOf(g);
+    if (si >= 0) S.grenades.splice(si, 1);
+    return;
+  }
   const radius = g.kind === 'he' ? HE_RADIUS : FLASH_RADIUS;
   play(g.kind === 'he' ? 'explode' : 'flash');
   // 玩家眼位: 与 bot 判定用同一个采样点, 保证三方规则一致
@@ -1045,7 +1133,7 @@ export function roundEnd(winner, reason) {
       msg = '你阵亡了 - 回合失败  +$1400';
     }
   }
-  S.money += reward;
+  S.money = Math.min(MONEY_CAP, S.money + reward);
   showCenter(msg, color);
   callUI('updateEquip');
   callUI('updateAmmo');
@@ -1111,6 +1199,7 @@ export function nextRound() {
   // (4 秒过场消息里) 和调试台, 都不会落在玩家正在移动的那一帧。
   if (typeof A.warmFlowGoals === 'function') A.warmFlowGoals();
   clearListMeshes(S.grenades);
+  clearListMeshes(S.smokes);
   clearListMeshes(S.debris);
   clearBombEntities();
 
@@ -1179,13 +1268,23 @@ export function nextRound() {
 // ---------------------------------------------------------------------------
 // 玩家 / 装备
 // ---------------------------------------------------------------------------
-export function damagePlayer(dmg) {
+// CS 1.5 的护甲公式 (取自 CBasePlayer::TakeDamage + ArmorRicochet):
+// 有甲时伤害先按武器的 armor_ratio 打折, 剩下的部分由护甲吸收一半、血量扣一半;
+// 护甲自身按 (伤害 - 剩余) 消耗, 且吸收量不超过剩余护甲值。
+// 旧实现一律 0.5 吸收, 于是 AK (armor_ratio 0.775) 打有甲目标只掉一半血,
+// 与真实手感差很多 —— AK 正是靠高穿甲在中远距离压 M4 的。
+export function damagePlayer(dmg, armorRatio = 0.5) {
   if (S.player.dead || S.BOMB.state === 'over' || !Number.isFinite(dmg) || dmg <= 0) return;
   let amount = dmg;
-  if (S.player.armor > 0) {
-    const absorbed = Math.min(S.player.armor, amount * 0.5);
-    S.player.armor -= absorbed;
-    amount -= absorbed;
+  const ratio = clamp(Number.isFinite(armorRatio) ? armorRatio : 0.5, 0, 1);
+  if (S.player.armor > 0 && ratio > 0) {
+    // 穿甲后剩余伤害
+    const afterArmor = amount * ratio;
+    // 被护甲吸收的那部分, 一半转为血量伤害, 一半由护甲值承担
+    const absorbed = (amount - afterArmor) * 0.5;
+    const armorLoss = Math.min(S.player.armor, absorbed);
+    S.player.armor = Math.max(0, S.player.armor - armorLoss);
+    amount = afterArmor + (absorbed - armorLoss) * 2 * 0.5;
     updateEquipText();
   }
   S.player.hp = Math.max(0, Math.round(S.player.hp - amount));
@@ -1200,6 +1299,7 @@ export function onPlayerDeath() {
   p.dead = true;
   p.speed = 0;
   p.armor = 0;
+  p.hasHelmet = false;
   p.hasKit = false;
   p.scoped = false;
   p.pitch = 0;
@@ -1226,40 +1326,66 @@ function canBuy() {
 }
 
 function priceOf(id) {
-  if (id === 'ak47' || id === 'awp') {
-    const p = (A.WEAPONS[id] || {}).price;
-    return Number.isFinite(p) ? p : null;
-  }
+  const w = A.WEAPONS[id];
+  if (w && Number.isFinite(w.price)) return w.price;
   if (Object.prototype.hasOwnProperty.call(GEAR, id)) return GEAR[id];
+  if (id === 'he') return 300;
+  if (id === 'flash') return 200;
+  if (id === 'smoke') return 300;
   if (id === 'ammo' || id === 'refill' || id === 'ammo_refill') return 300;
   return null;
+}
+
+// 队伍限制: CS 1.5 里 AK/SG552/G3SG1/glock/elite/deagle 是 T 专用,
+// M4A1/AUG/SG550/USP/fiveseven 是 CT 专用, 其余双方都能买。
+export function canBuyItem(id) {
+  const w = A.WEAPONS[id];
+  if (!w) return true;                       // 装备类无队伍限制
+  if (!w.team) return true;
+  return w.team === 'ct';                    // 玩家固定是 CT
 }
 
 export function buyItem(id) {
   const price = priceOf(id);
   if (price === null || price === undefined || !canBuy()) return false;
-  if ((id === 'armor' && S.player.armor >= 100)
+  if (!canBuyItem(id)) {
+    hitText(`敌方武器: ${(A.WEAPONS[id] || {}).name || id}`, 1.0);
+    return false;
+  }
+  const w = A.WEAPONS[id];
+  // 重复购买防护
+  if (w) {
+    if (S.owned[id]) return false;
+  } else if ((id === 'armor' && S.player.armor >= 100)
+    || (id === 'kevlarhelm' && S.player.armor >= 100 && S.player.hasHelmet)
     || (id === 'kit' && S.player.hasKit)
-    || ((id === 'he' || id === 'flash') && S.player.nades[id] >= NADE_LIMIT[id])) return false;
+    || ((id === 'he' || id === 'flash' || id === 'smoke') && S.player.nades[id] >= NADE_LIMIT[id])) return false;
   if (S.money < price) {
     hitText('资金不足', 0.8);
     return false;
   }
   S.money -= price;
   play('buy');
-  if (id === 'ak47' || id === 'awp') {
-    for (const primary of ['ak47', 'awp']) {
-      if (primary !== id) { delete S.owned[primary]; delete S.ammo[primary]; }
+
+  if (w) {
+    // 同一槽位只能持有一把: 主武器覆盖主武器, 手枪覆盖手枪
+    const slot = w.slot;
+    for (const other of Object.keys(S.owned)) {
+      const ow = A.WEAPONS[other];
+      if (other !== id && ow && ow.slot === slot) { delete S.owned[other]; delete S.ammo[other]; }
     }
     S.owned[id] = true;
     giveAmmo(id);
     switchWeapon(id);
   } else if (id === 'armor') {
     S.player.armor = 100;
+  } else if (id === 'kevlarhelm') {
+    S.player.armor = 100;
+    S.player.hasHelmet = true;
   } else if (id === 'kit') {
     S.player.hasKit = true;
-  } else if (id === 'he' || id === 'flash') {
-    S.player.nades[id] += 1;
+  } else if (id === 'he' || id === 'flash' || id === 'smoke') {
+    S.player.nades[id] = (S.player.nades[id] || 0) + 1;
   } else {
     for (const wid of Object.keys(S.owned)) giveAmmo(wid);
   }
@@ -1390,6 +1516,7 @@ export function updateGame(dt) {
     if (bot && bot.enabled && typeof bot.update === 'function') bot.update(d);
   }
   updateGrenades(d);
+  updateSmokes(d);
   updateDebris(d);
 
   if (S.player.dead) {

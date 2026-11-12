@@ -6,7 +6,7 @@ import { S, clamp, fmtTime, play, showCenter, setSensitivity } from './state.js'
 import { initEngine, updateEngine, renderFrame, shoot } from './engine.js';
 import {
   initGame, updateGame, nextRound, toggleBuyMenu, buyItem,
-  switchWeapon, reloadWeapon, throwNade,
+  switchWeapon, reloadWeapon, throwNade, BUY_CATEGORIES,
 } from './game.js';
 
 const $ = id => document.getElementById(id);
@@ -150,10 +150,11 @@ function refreshAmmo() {
 }
 
 function refreshEquip() {
-  setText(D.armorText, `AP ${Math.round(S.player.armor || 0)}`);
+  const hasHelm = !!S.player.hasHelmet;
+  setText(D.armorText, `AP ${Math.round(S.player.armor || 0)}${hasHelm ? ' +头盔' : ''}`);
   setColor(D.armorText, (S.player.armor || 0) > 0 ? '#96c8ff' : '#737373');
-  const n = S.player.nades || { he: 0, flash: 0 };
-  setText(D.nadeText, `HE x${n.he || 0}  闪 x${n.flash || 0}`);
+  const n = S.player.nades || { he: 0, flash: 0, smoke: 0 };
+  setText(D.nadeText, `HE x${n.he || 0}  闪 x${n.flash || 0}  烟 x${n.smoke || 0}`);
   if (S.player.hasKit) {
     setText(D.kitText, '拆弹钳  已装备 (5s)');
     setColor(D.kitText, '#82ff96');
@@ -174,12 +175,65 @@ function syncBuyUI(explicitOpen) {
   show(D.buyMenu, open);
   setText(D.buyMoney, `$ ${S.money}`);
   if (open) {
+    renderBuyMenu();
     if (document.pointerLockElement === canvas) exitLock();
   } else if (changed && buyWasOpen && S.started && !S.pointerLocked && !document.hidden) {
     requestLock();
   }
   buyWasOpen = open;
   updatePointerHint();
+}
+
+// 购买菜单: 按 CS 1.5 的分类渲染。买不起 / 队伍不符的项置灰但仍显示价格,
+// 这样玩家能看出"这把枪存在但我不该买"(与 CS 里敌方武器不可见不同,
+// 这里显式标注敌方武器, 避免玩家反复点却不知道为什么没反应)。
+let buyTab = 0;
+
+function buyItemLabel(id) {
+  const w = A.WEAPONS[id];
+  if (w) return w.name;
+  return { armor: '凯夫拉护甲', kevlarhelm: '护甲 + 头盔', kit: '拆弹钳',
+    he: 'HE 手雷', flash: '闪光弹', smoke: '烟雾弹', ammo: '补满弹药' }[id] || id;
+}
+
+function buyItemPrice(id) {
+  const w = A.WEAPONS[id];
+  if (w) return w.price;
+  return { armor: 650, kevlarhelm: 1000, kit: 200, he: 300, flash: 200, smoke: 300, ammo: 300 }[id] ?? 0;
+}
+
+function renderBuyMenu() {
+  const tabs = D.buyTabs, items = D.buyItems;
+  if (!tabs || !items) return;
+  const cats = BUY_CATEGORIES;
+  if (buyTab >= cats.length) buyTab = 0;
+
+  tabs.innerHTML = '';
+  cats.forEach((cat, i) => {
+    const b = document.createElement('div');
+    b.className = 'tab' + (i === buyTab ? ' active' : '');
+    b.textContent = `${i + 1} ${cat.label}`;
+    b.addEventListener('click', () => { buyTab = i; renderBuyMenu(); });
+    tabs.appendChild(b);
+  });
+
+  items.innerHTML = '';
+  for (const id of cats[buyTab].ids) {
+    const price = buyItemPrice(id);
+    const w = A.WEAPONS[id];
+    const enemy = w && w.team && w.team !== 'ct';
+    const afford = S.money >= price;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('data-buy', id);
+    btn.className = (enemy || !afford) ? 'cant' : '';
+    let tag = '';
+    if (enemy) tag = '<span class="wtag">敌方</span>';
+    else if (A.WEAPONS[id] && S.owned[id]) tag = '<span class="wtag">已持有</span>';
+    btn.innerHTML = `<span class="wname">${buyItemLabel(id)}${tag}</span>` +
+      `<span class="wprice">$${price}</span>`;
+    items.appendChild(btn);
+  }
 }
 
 function initHUD() {
@@ -204,6 +258,7 @@ function initHUD() {
   grab('scoreboard', 'scoreboard'); grab('sbTitle', 'sb-title');
   grab('sbBody', 'sb-body'); grab('sbHint', 'sb-hint');
   grab('buyMenu', 'buy-menu'); grab('buyTitle', 'buy-title');
+  grab('buyTabs', 'buy-tabs'); grab('buyItems', 'buy-items');
   grab('buyMoney', 'buy-money'); grab('redFlash', 'red-flash');
   grab('whiteFlash', 'white-flash');
 
@@ -239,7 +294,7 @@ function initHUD() {
   wrapHook('toggleBuy', open => syncBuyUI(!!open));
   wrapHook('buy', () => { setText(D.buyMoney, `$ ${S.money}`); });
 
-  setText(D.slotText, '1 主武器 2 手枪 3 匕首 | G 手雷 F 闪光 | E 拆弹 | B 购买 | [ ] 灵敏度 | Tab 计分 | ESC 退出');
+  setText(D.slotText, '1 主武器 2 手枪 3 匕首 | G 手雷 F 闪光 X 烟雾 | R 换弹 E 拆弹 | B 购买 | [ ] 灵敏度 | Tab 计分 | ESC 退出');
   setText(D.sbHint, '松开 Tab 关闭');
   setText(D.buyTitle, '— 购买装备 —');
   refreshAmmo();
@@ -600,6 +655,20 @@ function selectWeapon(wid) {
   if (wid && S.owned[wid]) switchWeapon(wid);
 }
 
+// 在自己拥有的某个槽位武器间循环。CS 1.5 里玩家通常只有一把主武器 + 一把
+// 手枪, 但买了新手枪时旧手枪会被覆盖, 所以这里按 owned 顺序轮转,
+// 重复按同一个数字键就在同槽武器间切换。
+function cycleSlot(slot) {
+  const inSlot = Object.keys(S.owned).filter(id => {
+    const w = A.WEAPONS[id];
+    return w && w.slot === slot;
+  });
+  if (!inSlot.length) return;
+  if (inSlot.length === 1) { selectWeapon(inSlot[0]); return; }
+  const cur = inSlot.indexOf(S.weapon);
+  selectWeapon(inSlot[(cur + 1) % inSlot.length]);
+}
+
 function initInput() {
   canvas = canvas || $('game');
 
@@ -664,7 +733,15 @@ function initInput() {
     if (e.repeat) return;                 // 一次性动作忽略按键重复
     if (pIsDeadOrOver()) return;
     if (code === 'KeyB') { toggleBuyMenu(); return; }
-    if (S.buyMenuOpen) return;
+    if (S.buyMenuOpen) {
+      // 购买菜单打开时, 数字键用于切换分类 (与 CS 1.5 的 buy 菜单一致)
+      const n = /^Digit([1-7])$/.exec(code);
+      if (n) {
+        buyTab = Number(n[1]) - 1;
+        renderBuyMenu();
+      }
+      return;
+    }
 
     if (code === 'KeyE') { S.defuseHeld = true; return; }
     if (code === 'KeyR') { reloadWeapon(); return; }
@@ -675,17 +752,15 @@ function initInput() {
       showCenter(`鼠标灵敏度 ${next.toFixed(2)}`, '#b4d2ff', 1.0);
       return;
     }
-    if (code === 'Digit1') {
-      // 主武器: 与原版一致, AWP 优先于 AK-47; 都没买则无动作
-      if (S.owned.awp) selectWeapon('awp');
-      else if (S.owned.ak47) selectWeapon('ak47');
-      return;
-    }
-    if (code === 'Digit2') { selectWeapon('usp'); return; }
-    if (code === 'Digit3') { selectWeapon('knife'); return; }
+    // 槽位切换: CS 1.5 里 1=主武器 2=手枪 3=刀。主武器/手枪可能有多把,
+    // 按购买顺序在自己拥有的同槽武器间循环 (重复按同一个数字键切下一把)。
+    if (code === 'Digit1') { cycleSlot(1); return; }
+    if (code === 'Digit2') { cycleSlot(2); return; }
+    if (code === 'Digit3') { cycleSlot(3); return; }
     if (code === 'KeyQ') { selectWeapon(lastWeapon); return; }
     if (code === 'KeyG') { throwNade('he'); return; }
     if (code === 'KeyF') { throwNade('flash'); return; }
+    if (code === 'KeyX') { throwNade('smoke'); return; }
   });
 
   document.addEventListener('keyup', e => {
