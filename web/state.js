@@ -62,6 +62,7 @@ export const S = {
   score: 0,
   allyKills: 0,
   ctScore: 0,
+  lossStreak: 0,          // 连败次数, 决定负方回合奖励档位 (见 game.js LOSS_BONUS)
   tScore: 0,
   roundNum: 0,
   botsPerRound: 5,

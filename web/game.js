@@ -554,12 +554,17 @@ class Bot {
     // 伤害按武器基础值缩放 (bot 命中率已单独建模, 所以这里不叠部位倍率,
     // 否则 AK 一发就能秒人, 手感会变成"子弹海绵"反过来的那种不合理)
     const base = wstat.dmg * Math.max(1, wstat.pellets | 0 || 1) * 0.28;
-    const dmg = Math.max(3, Math.round(base * rand(0.75, 1.25)));
+    // 约 12% 的命中打在头部 —— 这样"头盔"才真正决定生死:
+    // 没头盔时爆头吃全额, 有头盔才吃护甲减免 (见 damagePlayer 的 zone 参数)。
+    const headshot = Math.random() < 0.12;
+    const raw = Math.max(3, Math.round(base * rand(0.75, 1.25)));
+    const dmg = headshot ? Math.round(raw * 2.5) : raw;
+    const zone = headshot ? 'head' : 'chest';
     if (!ent) {
-      damagePlayer(dmg, wstat.armor_ratio ?? 0.5);
+      damagePlayer(dmg, wstat.armor_ratio ?? 0.5, zone);
     } else if (ent.team !== this.team && ent.enabled && ent.health > 0
       && typeof ent.takeDamage === 'function') {
-      ent.takeDamage(dmg, false, this.pos, this.name);
+      ent.takeDamage(dmg, headshot, this.pos, this.name, zone);
     }
   }
 
@@ -1050,6 +1055,7 @@ export function plantC4(pos) {
   if (B.state !== 'live') return;
   const p = safeArr(pos);
   B.state = 'planted';
+  B.wasPlanted = true;             // 记下本回合确实下过包 (T 输了也有 +$800)
   B.c4Left = A.C4_TIME;
   const c = A.cellOf(p);
   let ground = A.surfaceAt(c[0], c[1], p[1]);
@@ -1100,6 +1106,13 @@ export function explodeC4() {
   roundEnd('t', 'exploded');
 }
 
+// CS 1.5 回合经济:
+//   胜方 +$3250 (拆弹/守点/团灭), 负方按连败次数递增 1400/1900/2400/2900/3400,
+//   上限 3400。旧实现固定给负方 1400, 导致落后一方永远翻不了身。
+const LOSS_BONUS = [1400, 1900, 2400, 2900, 3400];
+const WIN_BONUS = 3250;
+const BOMB_PLANT_BONUS = 800;      // T 安放 C4 即使输了也有 800 (鼓励下包)
+
 export function roundEnd(winner, reason) {
   const B = S.BOMB;
   if (B.state === 'over') return;
@@ -1107,33 +1120,41 @@ export function roundEnd(winner, reason) {
   let msg, color, reward;
   if (winner === 'ct') {
     S.ctScore += 1;
+    S.lossStreak = 0;
     if (reason === 'defused') {
       play('c4_defuse');
-      msg = 'C4 已拆除 - CT 胜利!  +$3250';
+      msg = 'C4 已拆除 - CT 胜利!';
     } else if (reason === 'timeout') {
       play('win');
-      msg = '时间耗尽 - CT 守住包点!  +$3250';
+      msg = '时间耗尽 - CT 守住包点!';
     } else {
       play('win');
-      msg = 'T 全灭 - CT 胜利!  +$3250';
+      msg = 'T 全灭 - CT 胜利!';
     }
     color = '#78ff78';
-    reward = 3250;
+    reward = WIN_BONUS;
   } else {
     S.tScore += 1;
     play('lose');
     S.player.armor = 0;
+    S.player.hasHelmet = false;
     if (reason === 'killed') S.player.hasKit = false;
     updateEquipText();
-    reward = 1400;
+    // 连败奖励: 输一次 +1 档, 上限 3400
+    const idx = Math.min(S.lossStreak, LOSS_BONUS.length - 1);
+    reward = LOSS_BONUS[idx];
+    S.lossStreak = Math.min(S.lossStreak + 1, LOSS_BONUS.length);
     color = '#ff6464';
-    if (reason === 'exploded') msg = 'C4 爆炸 - 回合失败  +$1400';
+    if (reason === 'exploded') msg = `C4 爆炸 - 回合失败`;
     else {
       S.whiteFlash = 0;
-      msg = '你阵亡了 - 回合失败  +$1400';
+      msg = `你阵亡了 - 回合失败`;
     }
+    // T 已安放 C4 的额外奖励
+    if (B.wasPlanted) { reward += BOMB_PLANT_BONUS; msg += ` (含下包 +$${BOMB_PLANT_BONUS})`; }
   }
   S.money = Math.min(MONEY_CAP, S.money + reward);
+  msg += `  +$${reward}`;
   showCenter(msg, color);
   callUI('updateEquip');
   callUI('updateAmmo');
@@ -1222,6 +1243,7 @@ export function nextRound() {
   B.defuse = 0;
   B.allyDefuse = 0;
   B.beepAt = 0;
+  B.wasPlanted = false;
   B.spawnLeft = S.botsPerRound;
   B.site = choice(['A', 'B']);
   B.targetPos = copy3(safeArr(A.BOMB_SITES[B.site]));
@@ -1268,19 +1290,22 @@ export function nextRound() {
 // ---------------------------------------------------------------------------
 // 玩家 / 装备
 // ---------------------------------------------------------------------------
-// CS 1.5 的护甲公式 (取自 CBasePlayer::TakeDamage + ArmorRicochet):
+// CS 1.5 的护甲公式 (CBasePlayer::TakeDamage + ArmorRicochet):
 // 有甲时伤害先按武器的 armor_ratio 打折, 剩下的部分由护甲吸收一半、血量扣一半;
 // 护甲自身按 (伤害 - 剩余) 消耗, 且吸收量不超过剩余护甲值。
 // 旧实现一律 0.5 吸收, 于是 AK (armor_ratio 0.775) 打有甲目标只掉一半血,
 // 与真实手感差很多 —— AK 正是靠高穿甲在中远距离压 M4 的。
-export function damagePlayer(dmg, armorRatio = 0.5) {
+//
+// zone: 'head' 时只有戴头盔才吃护甲减免 —— 这是 CS 里"头盔"的唯一作用,
+// 没有头盔时头部完全裸奔 (爆头伤害全额)。旧实现把头盔做成了纯装饰。
+export function damagePlayer(dmg, armorRatio = 0.5, zone = 'chest') {
   if (S.player.dead || S.BOMB.state === 'over' || !Number.isFinite(dmg) || dmg <= 0) return;
   let amount = dmg;
   const ratio = clamp(Number.isFinite(armorRatio) ? armorRatio : 0.5, 0, 1);
-  if (S.player.armor > 0 && ratio > 0) {
-    // 穿甲后剩余伤害
+  // 头盔判定: 打头时没头盔 = 护甲无效
+  const armorApplies = zone !== 'head' || !!S.player.hasHelmet;
+  if (S.player.armor > 0 && ratio > 0 && armorApplies) {
     const afterArmor = amount * ratio;
-    // 被护甲吸收的那部分, 一半转为血量伤害, 一半由护甲值承担
     const absorbed = (amount - afterArmor) * 0.5;
     const armorLoss = Math.min(S.player.armor, absorbed);
     S.player.armor = Math.max(0, S.player.armor - armorLoss);
