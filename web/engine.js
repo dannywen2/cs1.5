@@ -836,6 +836,13 @@ export function makeBotMesh(modelName, weaponName) {
   // 不能按世界单位写。旧实现用 PlaneGeometry(1,1) + scale 0.16, 经 group
   // 缩放后在世界里变成约 5x11 单位的大方块, 一开火就把手臂"撑开"了。
   // 这里改成 0.045 (约 1.4 x 1.4 世界单位), 与原版那个小闪光相称。
+  // 枪口焰: 一块小方片, 只在开火瞬间显示。
+  //
+  // 这里有一个必须绕开的坑: 这个 group 的缩放是 (32, 72, 32) —— 非等比。
+  // 任何挂在上面的子节点都会被"拉扁/拉长", 一个正方形平面会变成 5 x 10,
+  // 看起来就像两只手张开成一个"大"字。
+  // 解法: 让 flash 自己抵消掉父级缩放, 方法是给它包一层 Sprite 式的做法 ——
+  // 用 scale 反向补偿, 使最终世界缩放是各向同性的。
   const flash = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({
@@ -845,19 +852,18 @@ export function makeBotMesh(modelName, weaponName) {
   );
   const wb = (wm && wm.bbox) || null;
   if (wb && wb[0] && wb[1]) {
-    // 枪口 = 包围盒"最靠前"(z 最大) 那一端的中心
+    // 枪口 = 包围盒最前端 (z 最大) 的中心, 再往前推一点避免被身体挡住
     const cx = (wb[0][0] + wb[1][0]) / 2;
     const cy = (wb[0][1] + wb[1][1]) / 2;
-    // bbox 最前端仍可能被 bot 自己的身体挡住, 再往前推一点
     flash.position.set(cx, cy, wb[1][2] + 0.12);
   } else {
-    flash.position.set(0, 0.80, 0.5);
+    flash.position.set(0, 0.80, 0.62);
   }
-  flash.scale.setScalar(0.145);
+  // 反向补偿父级 (32,72,32): 让 flash 在世界上是 1.5 单位的正方形,
+  // 而不是随父级比例被拉成 1.5 x 3.4。
+  const FSIZE = 4.0;   // 世界上约 4 单位的正方形火光 (屏高约 4%)
+  flash.scale.set(FSIZE / 32, FSIZE / 72, FSIZE / 32);
   flash.visible = false;
-  // 必须挂到 group 下: 否则 flash 会留在世界原点, 既不会跟着 bot 移动,
-  // 也不会被 group 的 (32,72,32) 缩放, 表现为"开火时画面里多出一块大
-  // 平面", 看起来就像手臂被撑开了。
   group.add(flash);
 
   // 受击闪白只切换本 bot 自己材质上的 map

@@ -209,13 +209,13 @@ export const VM_TUNE = {
   //
   // right/down 是相机空间的偏移; 正值 right 向右, 负值 down 向下。
   // heightPct 是目标屏幕高度占比; toCam 是距相机距离 (太近会有透视畸变)。
-  pistol:   { heightPct: 44, right: 0.7, down: -0.40, toCam: 0.80, rot: [0, -6, 5] },
-  smg:      { heightPct: 44, right: 0.7, down: -0.42, toCam: 0.82, rot: [-3, -7, 5] },
-  rifle:    { heightPct: 44, right: 0.69, down: -0.40, toCam: 0.82, rot: [-5, -6, 5] },
-  shotgun:  { heightPct: 45, right: 0.7, down: -0.39, toCam: 0.81, rot: [-4, -6, 5] },
-  sniper:   { heightPct: 42, right: 0.69, down: -0.41, toCam: 0.84, rot: [-3, -6, 5] },
-  mg:       { heightPct: 44, right: 0.69, down: -0.39, toCam: 0.82, rot: [-5, -6, 5] },
-  knife:    { heightPct: 46, right: 0.74, down: -0.42, toCam: 0.78, rot: [0, -6, 5] },
+  pistol:   { heightPct: 44, right: 0.84, down: -0.50, toCam: 0.80, rot: [0, -6, 5] },
+  smg:      { heightPct: 44, right: 0.84, down: -0.52, toCam: 0.82, rot: [-3, -7, 5] },
+  rifle:    { heightPct: 44, right: 0.83, down: -0.50, toCam: 0.82, rot: [-5, -6, 5] },
+  shotgun:  { heightPct: 45, right: 0.84, down: -0.49, toCam: 0.81, rot: [-4, -6, 5] },
+  sniper:   { heightPct: 42, right: 0.83, down: -0.51, toCam: 0.84, rot: [-3, -6, 5] },
+  mg:       { heightPct: 44, right: 0.83, down: -0.49, toCam: 0.82, rot: [-5, -6, 5] },
+  knife:    { heightPct: 30, right: 2.94, down: -1.66, toCam: 0.60, rot: [0, -6, 5] },
 };
 
 // 逐武器缩放修正因子。
@@ -226,7 +226,7 @@ export const VM_TUNE = {
 // (measure 脚本), 让每把枪最终都落在 VM_TUNE 的目标高度上。
 // 改动模型/旋转后需要重新测量并更新此表。
 export const VM_FIT = {
-  knife: 38.0559,
+  knife: 8.0,
   glock18: 0.9334,
   usp: 1.6035,
   p228: 1.1297,
