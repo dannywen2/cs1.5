@@ -74,6 +74,33 @@ KNIFE_NORMAL = (-0.502, -0.328, 0.800)
 KNIFE_TARGET = (-0.36, 0.24, 0.90)
 KNIFE_ROLL_DEG = -20.0
 
+# 枪械基准姿态: 让枪管从右下指向"左上偏前", 这样屏幕上枪身是斜的 (原版观感)。
+# 仅平移 (CENTER) 时枪管沿 +z 正对消失点, 透视下投影成近乎垂直的一段,
+# 运行时怎么调旋转都出不来斜角 (实测只能在 59~111 度之间)。
+GUN_AXIS_TARGET = (-0.62, 0.14, 0.77)
+GUN_ROLL_DEG = -10.0
+
+
+def gun_pose_matrix():
+    """把 +z 旋到 GUN_AXIS_TARGET, 并绕枪管轴滚 GUN_ROLL_DEG 度。"""
+    a0 = (0.0, 0.0, 1.0)
+    a1 = (0.0, 1.0, 0.0)
+    a2 = _norm(_cross(a0, a1))
+    a1 = _norm(_cross(a2, a0))
+
+    t0 = _norm(GUN_AXIS_TARGET)
+    up = _norm(_cross(_cross(t0, (0.0, 1.0, 0.0)), t0))
+    side = _norm(_cross(up, t0))
+    ca = math.cos(math.radians(GUN_ROLL_DEG))
+    sa = math.sin(math.radians(GUN_ROLL_DEG))
+    t1 = _norm(tuple(ca * up[i] + sa * side[i] for i in range(3)))
+    t2 = _norm(_cross(t0, t1))
+
+    T = [[t0[i], t1[i], t2[i]] for i in range(3)]
+    A = [[a0[i], a1[i], a2[i]] for i in range(3)]
+    return [[sum(T[i][k] * A[j][k] for k in range(3)) for j in range(3)]
+            for i in range(3)]
+
 
 def _norm(a):
     l = math.sqrt(sum(x * x for x in a)) or 1.0
@@ -157,6 +184,12 @@ def bake_full(wid, fname):
         R = knife_pose_matrix()
         cverts = [tuple(CENTER[i] + sum(R[i][j] * (p[j] - CENTER[j])
                                        for j in range(3)) for i in range(3))
+                  for p in cverts]
+    else:
+        # 所有枪械统一加基准姿态 (见 GUN_AXIS_TARGET 的说明)
+        R = gun_pose_matrix()
+        cverts = [tuple(CENTER[i2] + sum(R[i2][j] * (p[j] - CENTER[j])
+                                       for j in range(3)) for i2 in range(3))
                   for p in cverts]
 
     os.makedirs(os.path.join(OUT, 'tex'), exist_ok=True)

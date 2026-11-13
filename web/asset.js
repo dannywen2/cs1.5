@@ -203,22 +203,17 @@ export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg
 //   right/toCam 枪身在屏幕右下方偏移量 (相机空间)
 // ---------------------------------------------------------------------------
 export const VM_TUNE = {
-  // heightPct: 目标屏幕高度占比
-  // right: 横向偏移 (相机空间, 越小越靠画面中心)
-  // down:  纵向偏移
-  // toCam: 距相机距离
-  //
-  // 距离不能太近: 相机近裁剪面是 0.1, 而枪口在 toCam 处再往前伸一截。
-  // 之前把 toCam 压到 0.5 时枪口离镜头只剩 0.6, 透视畸变极大, 模型一端
-  // 被拉到屏幕外 (实测 7 把武器的底部超出屏幕)。0.85~0.95 是既近又不
-  // 畸变的区间, 原版 CS 的枪身也大致占这个尺度。
-  pistol:   { heightPct: 40, right: 0.16, down: -0.26, toCam: 0.86, rot: [0, -10, 10] },
-  smg:      { heightPct: 38, right: 0.15, down: -0.24, toCam: 0.90, rot: [-4, -11, 9] },
-  rifle:    { heightPct: 38, right: 0.14, down: -0.24, toCam: 0.90, rot: [-6, -10, 9] },
-  shotgun:  { heightPct: 39, right: 0.15, down: -0.25, toCam: 0.89, rot: [-5, -10, 9] },
-  sniper:   { heightPct: 37, right: 0.14, down: -0.23, toCam: 0.92, rot: [-4, -10, 9] },
-  mg:       { heightPct: 38, right: 0.14, down: -0.26, toCam: 0.90, rot: [-6, -10, 9] },
-  knife:    { heightPct: 42, right: 0.22, down: -0.26, toCam: 0.82, rot: [0, -10, 9] },
+  // right/down: 枪身在屏幕上的落点。目标是让枪托落在右下角、枪口指向
+  //             画面中心偏右上方 —— 这是 CS 1.5 第一人称的典型构图。
+  // heightPct:  目标屏幕高度占比
+  // toCam:      距相机距离 (太近会透视畸变, 太远又显得"枪离得远")
+  pistol:   { heightPct: 40, right: 0.30, down: -0.34, toCam: 0.86, rot: [0, -8, 8] },
+  smg:      { heightPct: 38, right: 0.30, down: -0.32, toCam: 0.90, rot: [-4, -9, 7] },
+  rifle:    { heightPct: 38, right: 0.29, down: -0.32, toCam: 0.90, rot: [-6, -8, 7] },
+  shotgun:  { heightPct: 39, right: 0.30, down: -0.33, toCam: 0.89, rot: [-5, -8, 7] },
+  sniper:   { heightPct: 37, right: 0.29, down: -0.31, toCam: 0.92, rot: [-4, -8, 7] },
+  mg:       { heightPct: 38, right: 0.29, down: -0.34, toCam: 0.90, rot: [-6, -8, 7] },
+  knife:    { heightPct: 42, right: 0.34, down: -0.34, toCam: 0.82, rot: [0, -8, 7] },
 };
 
 // 逐武器缩放修正因子。
@@ -229,29 +224,29 @@ export const VM_TUNE = {
 // (measure 脚本), 让每把枪最终都落在 VM_TUNE 的目标高度上。
 // 改动模型/旋转后需要重新测量并更新此表。
 export const VM_FIT = {
-  knife: 16.540,
-  glock18: 0.879,
-  usp: 1.554,
-  p228: 1.130,
-  deagle: 1.252,
-  elite: 1.058,
-  fiveseven: 1.155,
-  m3: 1.299,
-  xm1014: 1.697,
-  tmp: 2.466,
-  mac10: 1.867,
-  mp5: 1.906,
-  ump45: 1.554,
-  p90: 1.711,
-  ak47: 1.397,
-  m4a1: 3.046,
-  sg552: 2.131,
-  aug: 2.929,
-  scout: 3.624,
-  awp: 2.562,
-  g3sg1: 2.620,
-  sg550: 2.569,
-  m249: 1.872,
+  knife: 17.5200,
+  glock18: 0.8951,
+  usp: 1.6913,
+  p228: 1.1986,
+  deagle: 1.3630,
+  elite: 0.8754,
+  fiveseven: 1.2091,
+  m3: 1.0100,
+  xm1014: 1.3780,
+  tmp: 1.6058,
+  mac10: 1.4766,
+  mp5: 1.3497,
+  ump45: 1.2594,
+  p90: 1.2902,
+  ak47: 1.1289,
+  m4a1: 1.8646,
+  sg552: 1.3959,
+  aug: 1.4977,
+  scout: 1.7941,
+  awp: 1.6284,
+  g3sg1: 1.9673,
+  sg550: 1.7850,
+  m249: 1.3451,
 };
 
 export function vmLds(wid) {
