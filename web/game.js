@@ -272,15 +272,29 @@ function createVisual(team, weaponId = null) {
 // moveAxis 的可通行判定, 不会把 bot 推进墙里。
 const SEPARATION_DIST = 36;
 const SEPARATION_MAX_PUSH = 60;
+let sepPush = null;              // separateBots 的推量缓冲 (复用, 避免每帧分配)
 
 function separateBots(bots, dt) {
   if (bots.length < 2) return;
+  // 两遍法: 先累积每只 bot 需要的总推量, 再统一应用。
+  //
+  // 旧实现一边遍历一边直接改 pos, 属于 Gauss-Seidel 式迭代: 后处理的配对
+  // 会把前面刚分开的一对又推回去, 结果在拥挤处反复震荡 —— 30 秒采样里约
+  // 5% 的帧仍存在一对重叠 (最小到 2.5)。改成先汇总再应用 (Jacobi 式),
+  // 各配对互不干扰, 收敛明显更稳。
   const minD = SEPARATION_DIST;
   const minD2 = minD * minD;
-  for (let i = 0; i < bots.length; i++) {
+  const n = bots.length;
+  // 复用缓冲区, 避免每帧分配
+  if (!sepPush || sepPush.length < n * 2) sepPush = new Float32Array(n * 2);
+  const push = sepPush;
+  push.fill(0);
+  let any = false;
+
+  for (let i = 0; i < n; i++) {
     const a = bots[i];
     if (!a.enabled || !a.pos) continue;
-    for (let j = i + 1; j < bots.length; j++) {
+    for (let j = i + 1; j < n; j++) {
       const b = bots[j];
       if (!b.enabled || !b.pos) continue;
       // 不同楼层的不算重叠 (上下层同格是正常的)
@@ -291,20 +305,40 @@ function separateBots(bots, dt) {
       if (d2 >= minD2) continue;
       let d = Math.sqrt(d2);
       if (d < 1e-3) {
-        // 完全重合: 用索引差给一个确定性的方向, 避免随机抖动
+        // 完全重合: 用索引差给确定性方向, 避免随机抖动
         const ang = i * 2.399 + j * 1.117;
         dx = Math.cos(ang); dz = Math.sin(ang); d = 1;
       }
       const nx = dx / d, nz = dz / d;
-      // 把两者直接推到刚好不重叠的位置 (各退一半), 再按可通行格校验。
-      // 这里不能只给一点推力: bot 常常一起冲同一条窄路, 每帧 2 单位的推力
-      // 追不上它们互相挤压的速度, 结果就是一直粘着。直接解算到目标距离。
+      // 各退一半到刚好不重叠, 再按限速缩放
       const need = (minD - d) * 0.5;
-      const step = Math.min(need, 80 * dt);   // 限速, 避免瞬移
-      const ax = a.pos[0] - nx * step, az = a.pos[2] - nz * step;
-      const bx = b.pos[0] + nx * step, bz = b.pos[2] + nz * step;
-      if (!cellBlockedAt([ax, 0, az])) { a.pos[0] = ax; a.pos[2] = az; }
-      if (!cellBlockedAt([bx, 0, bz])) { b.pos[0] = bx; b.pos[2] = bz; }
+      // 限速要足够高: bot 相向移动时每帧接近 4 单位, 80*dt (=1.3) 追不上,
+      // 会在拥挤处反复穿插。放宽到 300*dt, 配合两遍法仍不会瞬移。
+      const step = Math.min(need, 300 * dt);
+      push[i * 2] -= nx * step;
+      push[i * 2 + 1] -= nz * step;
+      push[j * 2] += nx * step;
+      push[j * 2 + 1] += nz * step;
+      any = true;
+    }
+  }
+
+  if (!any) return;
+
+  // 统一应用, 并按可通行格校验 (不把 bot 推进墙里)
+  for (let i = 0; i < n; i++) {
+    const b = bots[i];
+    if (!b.enabled || !b.pos) continue;
+    const dx = push[i * 2], dz = push[i * 2 + 1];
+    if (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) continue;
+    const tx = b.pos[0] + dx, tz = b.pos[2] + dz;
+    if (!cellBlockedAt([tx, 0, tz])) {
+      b.pos[0] = tx;
+      b.pos[2] = tz;
+    } else if (!cellBlockedAt([b.pos[0] + dx, 0, b.pos[2]])) {
+      b.pos[0] += dx;
+    } else if (!cellBlockedAt([b.pos[0], 0, b.pos[2] + dz])) {
+      b.pos[2] += dz;
     }
   }
 }
@@ -1611,6 +1645,19 @@ export function updateGame(dt) {
   }
   // bot 互推放在各自 update 之后: 先让 AI 决定移动, 再纠正重叠
   separateBots(S.enemies.concat(S.allies), d);
+  // 行走动画: 按本帧实际位移速度驱动 walk / run 循环
+  for (const bot of S.enemies.concat(S.allies)) {
+    if (!bot || !bot.enabled || !bot.visual) continue;
+    const v = bot.visual;
+    if (typeof v.updateAnim !== "function") continue;
+    // 用本帧位移估算速度 (单位/秒), 避免依赖 AI 内部状态
+    if (!bot._animPrev) bot._animPrev = [bot.pos[0], bot.pos[2]];
+    const dx = bot.pos[0] - bot._animPrev[0];
+    const dz = bot.pos[2] - bot._animPrev[1];
+    const speed = d > 1e-5 ? Math.hypot(dx, dz) / d : 0;
+    bot._animPrev = [bot.pos[0], bot.pos[2]];
+    v.updateAnim(d, speed);
+  }
   updateGrenades(d);
   updateSmokes(d);
   updateDebris(d);

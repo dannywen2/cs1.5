@@ -52,7 +52,7 @@ ALLOW_EXACT_ASSETS = {
 SFX_RE = re.compile(r'^sfx_[a-z0-9_]+\.wav$')
 # 只允许这些扩展名, 防止白名单前缀下混入意外文件
 ALLOW_EXT = {'.html', '.css', '.js', '.mjs', '.json', '.png', '.wav',
-             '.geo', '.col', '.hit', '.nav'}
+             '.geo', '.col', '.hit', '.nav', '.anim'}
 
 
 def is_allowed(url_path: str) -> bool:
@@ -85,6 +85,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '.col': 'application/octet-stream',
         '.hit': 'application/octet-stream',
         '.nav': 'application/octet-stream',
+        '.anim': 'application/octet-stream',
         '.wav': 'audio/wav',
     }
 

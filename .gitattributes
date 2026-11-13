@@ -15,5 +15,6 @@
 *.col binary
 *.nav binary
 *.hit binary
+*.anim binary
 *.exe binary
 *.zip binary

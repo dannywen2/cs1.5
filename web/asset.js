@@ -203,14 +203,22 @@ export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg
 //   right/toCam 枪身在屏幕右下方偏移量 (相机空间)
 // ---------------------------------------------------------------------------
 export const VM_TUNE = {
-  // 类别默认值: heightPct 目标屏幕高度占比, right/down 屏幕偏移, toCam 相机距离
-  pistol:   { heightPct: 42, right: 0.30, down: -0.34, toCam: 0.62, rot: [0, -15, 14] },
-  smg:      { heightPct: 38, right: 0.28, down: -0.30, toCam: 0.66, rot: [-4, -15, 12] },
-  rifle:    { heightPct: 38, right: 0.26, down: -0.30, toCam: 0.66, rot: [-6, -15, 12] },
-  shotgun:  { heightPct: 39, right: 0.28, down: -0.31, toCam: 0.64, rot: [-5, -15, 12] },
-  sniper:   { heightPct: 37, right: 0.26, down: -0.29, toCam: 0.67, rot: [-4, -15, 12] },
-  mg:       { heightPct: 38, right: 0.26, down: -0.32, toCam: 0.66, rot: [-6, -15, 12] },
-  knife:    { heightPct: 44, right: 0.34, down: -0.34, toCam: 0.58, rot: [0, -15, 12] },
+  // heightPct: 目标屏幕高度占比
+  // right: 横向偏移 (相机空间, 越小越靠画面中心)
+  // down:  纵向偏移
+  // toCam: 距相机距离
+  //
+  // 距离不能太近: 相机近裁剪面是 0.1, 而枪口在 toCam 处再往前伸一截。
+  // 之前把 toCam 压到 0.5 时枪口离镜头只剩 0.6, 透视畸变极大, 模型一端
+  // 被拉到屏幕外 (实测 7 把武器的底部超出屏幕)。0.85~0.95 是既近又不
+  // 畸变的区间, 原版 CS 的枪身也大致占这个尺度。
+  pistol:   { heightPct: 40, right: 0.16, down: -0.26, toCam: 0.86, rot: [0, -10, 10] },
+  smg:      { heightPct: 38, right: 0.15, down: -0.24, toCam: 0.90, rot: [-4, -11, 9] },
+  rifle:    { heightPct: 38, right: 0.14, down: -0.24, toCam: 0.90, rot: [-6, -10, 9] },
+  shotgun:  { heightPct: 39, right: 0.15, down: -0.25, toCam: 0.89, rot: [-5, -10, 9] },
+  sniper:   { heightPct: 37, right: 0.14, down: -0.23, toCam: 0.92, rot: [-4, -10, 9] },
+  mg:       { heightPct: 38, right: 0.14, down: -0.26, toCam: 0.90, rot: [-6, -10, 9] },
+  knife:    { heightPct: 42, right: 0.22, down: -0.26, toCam: 0.82, rot: [0, -10, 9] },
 };
 
 // 逐武器缩放修正因子。
@@ -221,29 +229,29 @@ export const VM_TUNE = {
 // (measure 脚本), 让每把枪最终都落在 VM_TUNE 的目标高度上。
 // 改动模型/旋转后需要重新测量并更新此表。
 export const VM_FIT = {
-  knife: 15.170,
-  glock18: 0.761,
-  usp: 1.302,
-  p228: 1.010,
-  deagle: 1.095,
-  elite: 0.981,
-  fiveseven: 1.026,
-  m3: 1.013,
-  xm1014: 1.292,
-  tmp: 1.827,
-  mac10: 1.511,
-  mp5: 1.495,
-  ump45: 1.262,
-  p90: 1.488,
-  ak47: 1.094,
-  m4a1: 2.203,
-  sg552: 1.633,
-  aug: 2.417,
-  scout: 2.473,
-  awp: 1.900,
-  g3sg1: 1.969,
-  sg550: 1.970,
-  m249: 1.459,
+  knife: 16.540,
+  glock18: 0.879,
+  usp: 1.554,
+  p228: 1.130,
+  deagle: 1.252,
+  elite: 1.058,
+  fiveseven: 1.155,
+  m3: 1.299,
+  xm1014: 1.697,
+  tmp: 2.466,
+  mac10: 1.867,
+  mp5: 1.906,
+  ump45: 1.554,
+  p90: 1.711,
+  ak47: 1.397,
+  m4a1: 3.046,
+  sg552: 2.131,
+  aug: 2.929,
+  scout: 3.624,
+  awp: 2.562,
+  g3sg1: 2.620,
+  sg550: 2.569,
+  m249: 1.872,
 };
 
 export function vmLds(wid) {
@@ -305,6 +313,7 @@ export const BOMB_SITES = {
   B: cellPos(SITE_CELLS.B[0], SITE_CELLS.B[1], 0),    // [-1528, 0, 2696]
 };
 
+export const PLAYER_BASE_NAMES = ['leet', 'terror', 'sas', 'urban'];
 export const PLAYER_MODEL_NAMES = ['leet', 'terror', 'sas', 'urban',
   'w_glock18', 'w_usp', 'w_p228', 'w_deagle', 'w_elite', 'w_fiveseven',
   'w_m3', 'w_xm1014', 'w_tmp', 'w_mac10', 'w_mp5', 'w_ump45', 'w_p90',
@@ -337,6 +346,7 @@ let navState = null;   // { nx, ny, wx0, wy0, cell, offs, heights }
 let colState = null;   // hull1 clipnode 树
 let hitState = null;   // hull0 渲染节点树
 const MODEL_TEMPLATES = new Map();  // 'player/leet' -> { meta, groups: [typed arrays...] }
+const ANIM_TEMPLATES = new Map();   // player 名 -> { clips }  (walk/run 逐帧顶点)
 const nearCache = new Map();
 const textureLoader = new THREE.TextureLoader();
 
@@ -1297,6 +1307,69 @@ export function findPath(a, b, aLayer = 0, bLayer = 0, out = null) {
 // 模型: 缓存 typed array 模板, 每次调用新建独立 BufferGeometry
 // (避免 Python 里共享 Mesh 节点被后生成的 bot 抢走的问题)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Bot 行走动画
+//
+// 原版玩家模型自带 walk / run 动作 (每套 33 / 37 帧)。之前 bot 用的是静态
+// 烘焙姿态 (ref_aim_c4 的一帧), 所以走动时整个人像滑行的雕塑。
+// 这里按帧烘焙蒙皮后的顶点 (hlsrc/bake_anim.py), 运行时逐帧替换 position
+// 属性即可播放, 不需要骨骼系统。
+//
+// v2: 顶点按"三角形展开"布局存储, 与静态 .geo 一一对应, 运行时整块拷贝即可。
+// (v1 存的是模型原始顶点, 与展开后的几何对不上, 已废弃。)
+// 文件格式见 hlsrc/bake_anim.py 顶部注释。位置用 int16 相对各 clip 包围盒
+// 量化, 一个 33 帧 / 390 顶点的走路循环只要 75KB。
+// ---------------------------------------------------------------------------
+export const ANIM_CLIPS = ["walk", "run"];
+
+function parseAnim(buffer) {
+  const dv = new DataView(buffer);
+  if (buffer.byteLength < 8) return null;
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  if (magic !== "CSAN") { console.warn("[asset] .anim magic mismatch", magic); return null; }
+  const version = dv.getUint16(4, true);
+  if (version !== 3) { console.warn("[asset] .anim 版本不支持:", version); return null; }
+  const nseq = dv.getUint16(6, true);
+  let p = 8;
+  const clips = {};
+  for (let s = 0; s < nseq; s++) {
+    const nameLen = dv.getUint16(p, true); p += 2;
+    let name = "";
+    for (let i = 0; i < nameLen; i++) name += String.fromCharCode(dv.getUint8(p + i));
+    p += nameLen;
+    const nframes = dv.getUint16(p, true); p += 2;
+    const ngroups = dv.getUint8(p); p += 1;
+    const groupVerts = [];
+    for (let g = 0; g < ngroups; g++) { groupVerts.push(dv.getUint16(p, true)); p += 2; }
+    const nverts = groupVerts.reduce((a, b) => a + b, 0);
+    const bmin = [dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)]; p += 12;
+    const inv = [dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)]; p += 12;
+    const total = nframes * nverts * 3;
+    const q = new Int16Array(total);
+    for (let i = 0; i < total; i++) q[i] = dv.getInt16(p + i * 2, true);
+    p += total * 2;
+    const frames = [];
+    for (let f = 0; f < nframes; f++) {
+      const arr = new Float32Array(nverts * 3);
+      const base = f * nverts * 3;
+      for (let v = 0; v < nverts; v++) {
+        for (let k = 0; k < 3; k++) {
+          arr[v * 3 + k] = bmin[k] + q[base + v * 3 + k] * inv[k];
+        }
+      }
+      frames.push(arr);
+    }
+    clips[name] = { name, nframes, nverts, groupVerts, frames };
+  }
+  return { version, clips };
+}
+
+// 取某个玩家模型的动画数据 (缺失时返回 null, 调用方退回静态姿态)
+export function getAnim(name) {
+  return ANIM_TEMPLATES.get(name) || null;
+}
+
+
 export function loadModel(folder, name) {
   const key = `${folder}/${name}`;
   const tpl = MODEL_TEMPLATES.get(key);
@@ -1522,6 +1595,9 @@ export async function loadAll(onProgress = null) {
     return new Map(m.groups.map((g, i) => [g.tex, list[i]]));
   }));
 
+  // bot 行走动画 (可选: 缺失时 bot 退回静态姿态)
+  job('bot anims', Promise.all(
+    PLAYER_BASE_NAMES.map(async n => [n, await fetchBuffer(`${ASSET}player/${n}.anim`)])));
   job('player models', Promise.all(
     PLAYER_MODEL_NAMES.map(name => loadModelAssets('player', name))));
   job('view models', Promise.all(
@@ -1536,7 +1612,7 @@ export async function loadAll(onProgress = null) {
   // radar_v2.png 在项目根目录, 不在 assets/
   job('radar', loadTexture(`${ROOT}radar_v2.png`, RADAR_TEX));
 
-  const [meta, geoBuf, navBuf, colBuf, hitBuf, worldTex, , , skyEntries, audioEntries, radarTexture] =
+  const [meta, geoBuf, navBuf, colBuf, hitBuf, worldTex, animEntries, , , skyEntries, audioEntries, radarTexture] =
     await Promise.all(jobs);
 
   navState = navBuf ? parseNav(navBuf) : null;
@@ -1561,6 +1637,15 @@ export async function loadAll(onProgress = null) {
   const vm = {};
   for (const name of VM_NAMES) vm[name] = loadModel('vm', name);
 
+  // bot 行走动画: 解析成逐帧 float32 位置表
+  for (const [name, buf] of animEntries) {
+    if (!buf) continue;
+    try {
+      const parsed = parseAnim(buf);
+      if (parsed && parsed.clips && Object.keys(parsed.clips).length) ANIM_TEMPLATES.set(name, parsed);
+    } catch (e) { console.warn(`[asset] 动画解析失败: ${name}`, e); }
+  }
+
   if (typeof onProgress === 'function') {
     try { onProgress(1, 'done', done, total); } catch (_) { /* 同上 */ }
   }
@@ -1570,6 +1655,7 @@ export async function loadAll(onProgress = null) {
     sky,
     skyFaces: SKY_FACES,
     models,
+    anims: Object.fromEntries(ANIM_TEMPLATES),
     vm,
     audio,
     radarTexture,

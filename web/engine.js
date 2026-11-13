@@ -745,6 +745,8 @@ export function makeBotMesh(modelName, weaponName) {
   group.scale.set(32, 72, 32);
   const parts = [];
   const gunParts = [];
+  // 该玩家模型的行走/奔跑动画 (可能缺失 -> 退回静态姿态)
+  const animData = (S.assets && S.assets.anims && S.assets.anims[modelName]) || null;
 
   const addModel = (name, out) => {
     const model = A.loadModel('player', name);
@@ -761,6 +763,61 @@ export function makeBotMesh(modelName, weaponName) {
   };
   addModel(modelName, parts);
   const wm = addModel(weaponName, gunParts);
+
+  // 动画播放: 逐帧把烘焙好的顶点位置写进 position 属性。
+  // 每帧顶点数必须与静态几何一致 (同一模型烘焙而来), 否则跳过。
+  let animClip = null;
+  let animTime = 0;
+  let animFrame = -1;
+  const animParts = parts.filter(p => p.mesh && p.mesh.geometry &&
+    p.mesh.geometry.getAttribute && p.mesh.geometry.getAttribute("position"));
+
+  // .anim 的顶点按"三角形展开"布局烘焙, 且记录了每个几何组的顶点数
+  // (例如 leet 是 [2220, 36])。播放时按组把顶点流切回去分别写入,
+  // 否则多贴图模型只有第一组会动。
+  const setClip = (name) => {
+    if (!animData || !animData.clips || !animData.clips[name]) return false;
+    if (animClip && animClip.name === name) return true;
+    const c = animData.clips[name];
+    if (!c.groupVerts || c.groupVerts.length < animParts.length) return false;
+    // 每个组的顶点数都必须与静态几何一致, 否则这份动画不能用于该模型
+    for (let i = 0; i < animParts.length; i++) {
+      const n = animParts[i].mesh.geometry.getAttribute("position").count;
+      if (c.groupVerts[i] !== n) return false;
+    }
+    animClip = c;
+    animFrame = -1;
+    animTime = 0;
+    return true;
+  };
+
+  const updateAnim = (dt, speed) => {
+    if (!animData) return;
+    const want = speed > 150 ? "run" : (speed > 12 ? "walk" : null);
+    if (!want) { animClip = null; return; }
+    if (!setClip(want)) return;
+    // GoldSrc 实测: 走路 133 单位/秒, 跑步 250 单位/秒
+    const baseSpeed = want === "run" ? 250 : 133;
+    const rate = Math.max(0.35, Math.min(speed / baseSpeed, 2.2));
+    const fps = 30 * rate;
+    animTime += dt;
+    const nf = animClip.nframes;
+    const f = Math.floor(animTime * fps) % nf;
+    if (f === animFrame) return;
+    animFrame = f;
+    const src = animClip.frames[f];
+    // 按组切片写入
+    let off = 0;
+    for (let i = 0; i < animParts.length; i++) {
+      const attr = animParts[i].mesh.geometry.getAttribute("position");
+      const n = attr.count * 3;
+      if (off + n <= src.length) {
+        for (let k = 0; k < n; k++) attr.array[k] = src[off + k];
+        attr.needsUpdate = true;
+      }
+      off += n;
+    }
+  };
 
   const hpBar = new THREE.Mesh(
     new THREE.PlaneGeometry(0.75, 0.055),
@@ -798,7 +855,7 @@ export function makeBotMesh(modelName, weaponName) {
   group.userData.flash = flash;
   group.userData.setHitFlash = setHitFlash;
   botVisuals.add(group);
-  return { group, parts, gunParts, hpBar, flash, setHitFlash };
+  return { group, parts, gunParts, hpBar, flash, setHitFlash, updateAnim, hasAnim: !!animData };
 }
 
 export function addEntityMesh(mesh) {
