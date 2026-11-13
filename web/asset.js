@@ -335,7 +335,8 @@ export const SFX_NAMES = [
   // 通用
     'reload',
     'knife',
-  'hit', 'head', 'kill', 'hurt', 'empty', 'buy', 'win', 'lose', 'footstep',
+  'hit', 'head', 'kill', 'hurt', 'empty', 'buy', 'win', 'lose',
+    'footstep1', 'footstep2', 'footstep3', 'footstep4',
   'explode', 'flash', 'pin', 'c4_beep', 'c4_plant', 'c4_defuse', 'radio', 'deploy',
   // 每把武器的开火音 (CS 1.5 原版, AK 与 M4 是两套完全不同的枪声)
   'fire_glock18', 'fire_usp', 'fire_p228', 'fire_deagle',

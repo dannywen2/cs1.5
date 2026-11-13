@@ -22,7 +22,12 @@ MAP = {
     'buy':    ['items/gunpickup2.wav'],
     'win':    ['radio/ctwin.wav', 'radio/terwin.wav'],
     'lose':   ['radio/rounddraw.wav', 'radio/ct_fireinhole.wav'],
-    'footstep': ['player/pl_step1.wav'],
+    # CS 1.5 的脚步声只有 4 个通用采样 (pl_step1..4), 按随机顺序轮播。
+    # 材质区分是 1.6 才引入的, 这个版本里没有对应素材。
+    'footstep1': ['player/pl_step1.wav'],
+    'footstep2': ['player/pl_step2.wav'],
+    'footstep3': ['player/pl_step3.wav'],
+    'footstep4': ['player/pl_step4.wav'],
     'knife':  ['weapons/knife_slash1.wav', 'weapons/knife_hit1.wav'],
     'explode': ['weapons/c4_explode1.wav'],
     'flash':  ['weapons/flashbang-1.wav', 'weapons/flashbang-2.wav'],

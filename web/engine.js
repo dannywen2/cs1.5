@@ -25,6 +25,7 @@ let skyScene = null, skyCamera = null, skyRoot = null;
 let vmScene = null, vmCamera = null, vmGroup = null, vmRoot = null, vmWrapper = null;
 let muzzle = null, muzzleUntil = 0, vmWeapon = null;
 let vmBasePos = [0, 0, 0], vmBaseRot = [0, 0, 0], vmSwing = 0;
+let lastFootstep = 0;      // 上一个脚步声编号, 避免连续重复
 let engineTime = 0;
 
 // 相机欧拉参数由 calibrateCamera() 实测确定 (不写死符号, 便于换 three.js 版本)
@@ -589,7 +590,12 @@ function updateVM(dt, moving) {
     S.stepTimer -= dt;
     if (S.stepTimer <= 0) {
       S.stepTimer = shiftHeld() ? 0.32 : 0.42;
-      play('footstep');
+      // CS 1.5 的脚步声是 4 个采样随机轮播, 且不连续重复同一个。
+      // 单一采样会让走路听起来很机械。
+      let n;
+      do { n = 1 + ((Math.random() * 4) | 0); } while (n === lastFootstep);
+      lastFootstep = n;
+      play('footstep' + n);
     }
   }
   // 相机空间 y 向下为负 -> 下沉即减小 y
