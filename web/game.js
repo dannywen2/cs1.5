@@ -266,6 +266,49 @@ function createVisual(team, weaponId = null) {
   };
 }
 
+// bot 之间的软分离: 玩家碰撞盒 32 宽, bot 之间保持 ~36 单位即可避免穿插。
+// 旧实现完全不检测彼此, 于是同一条冲锋路线上会叠成一坨 (尤其是一起冲向
+// 包点的 T)。这里只在"已经重叠"时才推, 推力随重叠加深而增大, 且仍然走
+// moveAxis 的可通行判定, 不会把 bot 推进墙里。
+const SEPARATION_DIST = 36;
+const SEPARATION_MAX_PUSH = 60;
+
+function separateBots(bots, dt) {
+  if (bots.length < 2) return;
+  const minD = SEPARATION_DIST;
+  const minD2 = minD * minD;
+  for (let i = 0; i < bots.length; i++) {
+    const a = bots[i];
+    if (!a.enabled || !a.pos) continue;
+    for (let j = i + 1; j < bots.length; j++) {
+      const b = bots[j];
+      if (!b.enabled || !b.pos) continue;
+      // 不同楼层的不算重叠 (上下层同格是正常的)
+      if (Math.abs(a.pos[1] - b.pos[1]) > 36) continue;
+      let dx = b.pos[0] - a.pos[0];
+      let dz = b.pos[2] - a.pos[2];
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= minD2) continue;
+      let d = Math.sqrt(d2);
+      if (d < 1e-3) {
+        // 完全重合: 用索引差给一个确定性的方向, 避免随机抖动
+        const ang = i * 2.399 + j * 1.117;
+        dx = Math.cos(ang); dz = Math.sin(ang); d = 1;
+      }
+      const nx = dx / d, nz = dz / d;
+      // 把两者直接推到刚好不重叠的位置 (各退一半), 再按可通行格校验。
+      // 这里不能只给一点推力: bot 常常一起冲同一条窄路, 每帧 2 单位的推力
+      // 追不上它们互相挤压的速度, 结果就是一直粘着。直接解算到目标距离。
+      const need = (minD - d) * 0.5;
+      const step = Math.min(need, 80 * dt);   // 限速, 避免瞬移
+      const ax = a.pos[0] - nx * step, az = a.pos[2] - nz * step;
+      const bx = b.pos[0] + nx * step, bz = b.pos[2] + nz * step;
+      if (!cellBlockedAt([ax, 0, az])) { a.pos[0] = ax; a.pos[2] = az; }
+      if (!cellBlockedAt([bx, 0, bz])) { b.pos[0] = bx; b.pos[2] = bz; }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bot
 // ---------------------------------------------------------------------------
@@ -1427,6 +1470,20 @@ export function toggleBuyMenu() {
   callUI('toggleBuy', S.buyMenuOpen);
 }
 
+// 每把武器的换弹时长 (秒), 接近 CS 1.5 的实测值:
+// 手枪换弹匣快, 霰弹枪逐发压弹慢, 机枪最慢。
+const RELOAD_TIME_BY_KIND = {
+  pistol: 1.8, smg: 2.0, rifle: 2.3, shotgun: 2.6, sniper: 2.6, mg: 3.4, knife: 0,
+};
+// 霰弹枪逐发装填: 每装一发的时间
+const SHOTGUN_PER_SHELL = 0.55;
+
+function reloadTimeOf(wp) {
+  if (!wp) return RELOAD_TIME;
+  const t = RELOAD_TIME_BY_KIND[wp.kind];
+  return Number.isFinite(t) && t > 0 ? t : RELOAD_TIME;
+}
+
 export function reloadWeapon() {
   const wid = S.weapon;
   const wp = A.WEAPONS[wid];
@@ -1434,8 +1491,19 @@ export function reloadWeapon() {
   if (!S.ammo[wid]) giveAmmo(wid);
   const ammo = S.ammo[wid];
   if (!ammo || ammo[0] >= wp.clip_size || ammo[1] <= 0) return;
+
   S.reloading = true;
-  play('reload');
+  S.reloadProgress = 0;
+  S.reloadStartedAt = performance.now();   // 与下面的 setTimeout 共用真实时间
+  play(wp.reload_sfx || 'reload_rifle');
+
+  // 霰弹枪是逐发压弹: 时长 = 需要装的发数 * 每发时间 (M3/XM1014 没有弹匣)
+  const need = Math.min(wp.clip_size - ammo[0], ammo[1]);
+  const dur = wp.kind === 'shotgun'
+    ? Math.max(SHOTGUN_PER_SHELL, need * SHOTGUN_PER_SHELL)
+    : reloadTimeOf(wp);
+  S.reloadDuration = dur;
+
   later(() => {
     if (wid === S.weapon && S.ammo[wid]) {
       const take = Math.min(wp.clip_size - S.ammo[wid][0], S.ammo[wid][1]);
@@ -1443,8 +1511,9 @@ export function reloadWeapon() {
       S.ammo[wid][1] -= take;
     }
     S.reloading = false;
+    S.reloadProgress = 0;
     callUI('updateAmmo');
-  }, RELOAD_TIME);
+  }, dur);
 }
 
 export function switchWeapon(wid) {
@@ -1540,6 +1609,8 @@ export function updateGame(dt) {
   for (const bot of S.enemies.concat(S.allies)) {
     if (bot && bot.enabled && typeof bot.update === 'function') bot.update(d);
   }
+  // bot 互推放在各自 update 之后: 先让 AI 决定移动, 再纠正重叠
+  separateBots(S.enemies.concat(S.allies), d);
   updateGrenades(d);
   updateSmokes(d);
   updateDebris(d);

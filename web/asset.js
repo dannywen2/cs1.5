@@ -516,11 +516,8 @@ function parseModelGeo(buffer, meta, folder) {
     const g = meta.groups[gi];
     const nv = dv.getInt32(p, true), nt = dv.getInt32(p + 4, true);
     p += 8;
-    // VM 的 skip 组是手/前臂: 只推进字节游标, 不生成渲染组
-    if (folder === 'vm' && g.skip) {
-      p += nv * 32 + nt * 12;             // 3f verts + 2f uv + 3f color = 32 B/顶点
-      continue;
-    }
+    // VM 的手/手臂组不再跳过: 第一人称必须看得见手, 只标记 hand
+    // (用于枪口焰/质心统计时把手排除掉, 避免手指把枪口推远)
     const position = new Float32Array(nv * 3);
     const uv = new Float32Array(nv * 2);
     const color = new Float32Array(nv * 3);
@@ -536,6 +533,7 @@ function parseModelGeo(buffer, meta, folder) {
     groups.push({
       tex: g.tex, groupIndex: gi, tris: nt,
       position, uv, color, indices, texture: null,
+      hand: !!g.hand,      // 手/手臂组: 正常渲染, 但不参与枪口焰定位
     });
   }
   return groups;
@@ -1272,7 +1270,8 @@ export function loadModel(folder, name) {
       map: g.texture, vertexColors: true, side: THREE.DoubleSide,
       transparent: false, depthWrite: true, depthTest: true,
     });
-    return { geometry, texture: g.texture, material, tex: g.tex, groupIndex: g.groupIndex };
+    return { geometry, texture: g.texture, material, tex: g.tex,
+             groupIndex: g.groupIndex, hand: !!g.hand };
   });
   return { groups, meta: tpl.meta };
 }

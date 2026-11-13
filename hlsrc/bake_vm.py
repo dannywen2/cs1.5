@@ -176,6 +176,7 @@ def bake_full(wid, fname):
                 v += [x, y, z]
                 uv += [s / tex.width, t / tex.height]
                 c3 += [1.0, 1.0, 1.0]
+                # 枪口只从"枪械部件"求最高 z, 手/手臂不参与 (否则手指会把枪口推远)
                 if not hand_mesh and (muz_z is None or z > muz_z):
                     muz_z = z
             idx += [len(idx), len(idx) + 1, len(idx) + 2]
@@ -184,8 +185,10 @@ def bake_full(wid, fname):
         blob += struct.pack('<%df' % len(uv), *uv)
         blob += struct.pack('<%df' % len(c3), *c3)
         blob += struct.pack('<%dI' % len(idx), *idx)
+        # hand=True 的组仍要正常渲染 (第一人称必须看得见手), 只是不参与
+        # 质心/枪口/包围盒统计。旧版直接 skip 掉整组, 结果是"看不到玩家的手"。
         groups.append({'tex': tname + '.png', 'tris': len(idx) // 3,
-                       'skip': hand_mesh})
+                       'hand': hand_mesh})
     with open(os.path.join(OUT, wid + '.geo'), 'wb') as fh:
         fh.write(blob)
     # bbox/muzzle 只统计实际渲染的枪械部件。round 到 1e-4, 避免某些
@@ -200,7 +203,7 @@ def bake_full(wid, fname):
         json.dump(meta, fh)
     print('%-6s verts=%-4d groups=%d tris=%d hand=%d muzzle=%.2f bbox=%s' % (
         wid, len(model.verts), len(groups), sum(g['tris'] for g in groups),
-        sum(1 for g in groups if g['skip']), meta['muzzle'][0],
+        sum(1 for g in groups if g['hand']), meta['muzzle'][0],
         [[round(x, 2) for x in meta['bbox'][0]], [round(x, 2) for x in meta['bbox'][1]]]))
 
 

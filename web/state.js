@@ -49,6 +49,9 @@ export const S = {
   ammo: {},                  // { wid: [clip, reserve] }
   shootCd: 0,
   reloading: false,
+  reloadProgress: 0,       // 0..1, 驱动第一人称换弹动作 (见 engine.js reloadPose)
+  reloadStartedAt: 0,
+  reloadDuration: 1.6,
   scoped: false,
   crossHeat: 0,
   stepTimer: 0,

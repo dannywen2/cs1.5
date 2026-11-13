@@ -477,6 +477,37 @@ export function buildViewmodel(wid) {
   vmSwing = 0;
 }
 
+// 换弹动作: 按换弹进度 (0..1) 驱动第一人称枪模做"下沉 -> 侧倾 -> 归位"。
+// 旧实现换弹只有音效, 枪模纹丝不动, 玩家完全看不出在换弹。
+// 曲线: 前 18% 快速下沉, 中段保持并在抖动中"换弹匣", 后 30% 回升到原位。
+function reloadPose(t) {
+  if (t <= 0 || t >= 1) return { drop: 0, roll: 0, pitch: 0, yaw: 0, forward: 0 };
+  const smooth = x => x * x * (3 - 2 * x);      // smoothstep
+  let drop, roll;
+  if (t < 0.18) {
+    const k = smooth(t / 0.18);
+    drop = k; roll = k;
+  } else if (t < 0.70) {
+    drop = 1; roll = 1;
+  } else {
+    const k = smooth((t - 0.70) / 0.30);
+    drop = 1 - k; roll = 1 - k;
+  }
+  // 中段插入一个换弹匣的顿挫 (两次小幅抖动), 让动作不是匀速平移
+  let jitter = 0;
+  if (t > 0.22 && t < 0.68) {
+    const phase = (t - 0.22) / 0.46;            // 0..1
+    jitter = Math.sin(phase * Math.PI * 4) * 0.35 * Math.sin(phase * Math.PI);
+  }
+  return {
+    drop: drop + jitter * 0.12,
+    roll: roll,
+    pitch: roll * 18 * DEG,                      // 枪口下压
+    yaw: roll * 10 * DEG,                        // 枪身向内侧转
+    forward: drop * 0.14 + jitter * 0.05,        // 轻微前后推拉 (幅度要小, 否则枪会缩进相机)
+  };
+}
+
 function updateVM(dt, moving) {
   if (!vmRoot) return;
   const a = S.vmAnim;
@@ -486,20 +517,29 @@ function updateVM(dt, moving) {
   a.dip = Math.max(0, a.dip - dt / 0.2);
   vmSwing = Math.max(0, vmSwing - dt / 0.35);
 
+  // 换弹动作叠加 (按换弹进度插值)
+  const rp = S.reloading ? reloadPose(S.reloadProgress || 0) : { drop: 0, roll: 0, pitch: 0, yaw: 0, forward: 0 };
+
+  // 注意: 位置必须**基于基准值赋值**, 不能用 += / -= 累积。旧实现
+  // vmRoot.position.y -= rp.drop * 0.16 每帧在上帧结果上继续偏移,
+  // 换弹两秒后枪会沉到屏幕外 (实测 y 从 -0.22 漂到 -1.45)。
+  let baseY = vmBasePos[1];
   if (moving && S.player.grounded) {
-    vmRoot.position.y = vmBasePos[1] + Math.sin(engineTime * 10) * 0.02;
+    baseY += Math.sin(engineTime * 10) * 0.02;
     S.stepTimer -= dt;
     if (S.stepTimer <= 0) {
       S.stepTimer = shiftHeld() ? 0.32 : 0.42;
       play('footstep');
     }
-  } else {
-    vmRoot.position.y += (vmBasePos[1] - vmRoot.position.y) * Math.min(1, dt * 8);
   }
-  vmRoot.rotation.x = vmBaseRot[0] - 1.5 * wp.recoil * a.recoil * DEG;
-  vmRoot.rotation.z = vmBaseRot[2] - 40 * vmSwing * DEG;
+  // 相机空间 y 向下为负 -> 下沉即减小 y
+  vmRoot.position.y = baseY - rp.drop * 0.16;
+
+  vmRoot.rotation.x = vmBaseRot[0] - 1.5 * wp.recoil * a.recoil * DEG + rp.pitch;
+  vmRoot.rotation.y = vmBaseRot[1] + rp.yaw;
+  vmRoot.rotation.z = vmBaseRot[2] - 40 * vmSwing * DEG - rp.roll * 8 * DEG;
   // 后坐向相机方向回缩: 相机空间 z 为负, 回缩即 z 增大
-  vmRoot.position.z = vmBasePos[2] + 0.08 * a.dip;
+  vmRoot.position.z = vmBasePos[2] + 0.08 * a.dip + rp.forward;
   if (muzzle) muzzle.visible = engineTime < muzzleUntil;
 }
 
@@ -826,6 +866,18 @@ export function updateEngine(dt) {
   if (!p.dead && !S.buyMenuOpen) updatePhysics(d);
 
   S.shootCd -= d;
+  // 换弹进度: 驱动第一人称换弹动作 (0..1)。
+  // 用 performance.now() (真实时间), 因为 reloadWeapon 的完成回调走 setTimeout
+  // (也是真实时间), 而主循环把 dt clamp 到 0.05。低帧率下两者会脱钩 —— 实测
+  // 6fps 时游戏时间只有真实时间的 30%, 枪只沉到 1/3 就弹回去, 动作看着断掉。
+  if (S.reloading) {
+    const dur = Number.isFinite(S.reloadDuration) && S.reloadDuration > 0 ? S.reloadDuration : 1.6;
+    if (!Number.isFinite(S.reloadStartedAt) || S.reloadStartedAt <= 0) S.reloadStartedAt = performance.now();
+    S.reloadProgress = Math.min(1, (performance.now() - S.reloadStartedAt) / (dur * 1000));
+  } else if (S.reloadProgress) {
+    S.reloadProgress = 0;
+    S.reloadStartedAt = 0;
+  }
   S.crossHeat = Math.max(0, S.crossHeat - d * 6);
   const wp = A.WEAPONS[S.weapon];
   if (S.mouseDown && wp && wp.auto && !S.buyMenuOpen && !p.dead) shoot();
