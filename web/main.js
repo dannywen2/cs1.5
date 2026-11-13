@@ -175,6 +175,7 @@ function syncBuyUI(explicitOpen) {
   show(D.buyMenu, open);
   setText(D.buyMoney, `$ ${S.money}`);
   if (open) {
+    // 只有打开时才渲染; 打开期间每帧走 refreshBuyMenu (只改文本, 不重建节点)
     renderBuyMenu();
     if (document.pointerLockElement === canvas) exitLock();
   } else if (changed && buyWasOpen && S.started && !S.pointerLocked && !document.hidden) {
@@ -188,6 +189,7 @@ function syncBuyUI(explicitOpen) {
 // 这样玩家能看出"这把枪存在但我不该买"(与 CS 里敌方武器不可见不同,
 // 这里显式标注敌方武器, 避免玩家反复点却不知道为什么没反应)。
 let buyTab = 0;
+let buyBuiltSig = '';   // 当前已构建的 (页签, 物品列表) 签名, 用于避免每帧重建 DOM
 
 function buyItemLabel(id) {
   const w = A.WEAPONS[id];
@@ -202,38 +204,84 @@ function buyItemPrice(id) {
   return { armor: 650, kevlarhelm: 1000, kit: 200, he: 300, flash: 200, smoke: 300, ammo: 300 }[id] ?? 0;
 }
 
-function renderBuyMenu() {
+// 购买菜单渲染。
+//
+// 重要: 这个函数每帧都会被 syncBuyUI() 调用 (HUD 每帧刷新价格/可买状态),
+// 因此**绝对不能每次都重建 DOM**。浏览器里 click 事件要求 mousedown 与
+// mouseup 落在同一个节点上, 节点若在两帧之间被 innerHTML='' 销毁重建,
+// click 永远不会派发 —— 表现就是"点枪没反应"。
+//
+// 所以这里分两层:
+//   - buildBuyMenu(): 仅当分类页签或该分类物品列表变化时才重建节点
+//   - refreshBuyMenu(): 每帧只改文本/class, 不动节点结构
+function buildBuyMenu() {
   const tabs = D.buyTabs, items = D.buyItems;
   if (!tabs || !items) return;
   const cats = BUY_CATEGORIES;
   if (buyTab >= cats.length) buyTab = 0;
+  const ids = cats[buyTab].ids;
+  const sig = buyTab + '|' + ids.join(',');
+  if (buyBuiltSig === sig) return;      // 结构没变 -> 不重建
+  buyBuiltSig = sig;
 
   tabs.innerHTML = '';
   cats.forEach((cat, i) => {
     const b = document.createElement('div');
     b.className = 'tab' + (i === buyTab ? ' active' : '');
     b.textContent = `${i + 1} ${cat.label}`;
-    b.addEventListener('click', () => { buyTab = i; renderBuyMenu(); });
+    b.setAttribute('data-tab', String(i));
     tabs.appendChild(b);
   });
 
   items.innerHTML = '';
-  for (const id of cats[buyTab].ids) {
-    const price = buyItemPrice(id);
-    const w = A.WEAPONS[id];
-    const enemy = w && w.team && w.team !== 'ct';
-    const afford = S.money >= price;
+  for (const id of ids) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.setAttribute('data-buy', id);
-    btn.className = (enemy || !afford) ? 'cant' : '';
-    let tag = '';
-    if (enemy) tag = '<span class="wtag">敌方</span>';
-    else if (A.WEAPONS[id] && S.owned[id]) tag = '<span class="wtag">已持有</span>';
-    btn.innerHTML = `<span class="wname">${buyItemLabel(id)}${tag}</span>` +
-      `<span class="wprice">$${price}</span>`;
+    btn.innerHTML = '<span class="wname"></span><span class="wprice"></span>';
     items.appendChild(btn);
   }
+}
+
+// 每帧的轻量刷新: 只写文本与 class, 不触碰节点身份
+function refreshBuyMenu() {
+  const items = D.buyItems;
+  if (!items) return;
+  const cats = BUY_CATEGORIES;
+  if (buyTab >= cats.length) buyTab = 0;
+  for (const btn of items.children) {
+    const id = btn.getAttribute('data-buy');
+    if (!id) continue;
+    const price = buyItemPrice(id);
+    const w = A.WEAPONS[id];
+    const enemy = !!(w && w.team && w.team !== 'ct');
+    const owned = !!(w && S.owned[id]);
+    const afford = S.money >= price;
+    const cls = (enemy || !afford || owned) ? 'cant' : '';
+    if (btn.className !== cls) btn.className = cls;
+    const nameEl = btn.firstElementChild, priceEl = btn.lastElementChild;
+    const tag = enemy ? '<span class="wtag">敌方</span>'
+      : (owned ? '<span class="wtag">已持有</span>' : '');
+    const want = `${buyItemLabel(id)}${tag}`;
+    if (nameEl && nameEl.innerHTML !== want) nameEl.innerHTML = want;
+    const wantPrice = '$' + price;
+    if (priceEl && priceEl.textContent !== wantPrice) priceEl.textContent = wantPrice;
+  }
+  // 页签高亮跟随 buyTab (数字键切换时也要更新)
+  const tabs = D.buyTabs;
+  if (tabs) {
+    for (let i = 0; i < tabs.children.length; i++) {
+      const el = tabs.children[i];
+      const on = i === buyTab;
+      const cls = 'tab' + (on ? ' active' : '');
+      if (el.className !== cls) el.className = cls;
+    }
+  }
+}
+
+function renderBuyMenu() {
+  buildBuyMenu();
+  refreshBuyMenu();
 }
 
 function initHUD() {
@@ -778,9 +826,25 @@ function initInput() {
     setScope(false);
   });
 
-  // 购买按钮: 用委托, 静态 #buy-menu 不存在时也不会崩
+  // 购买按钮与分类页签: 统一用事件委托。
+  // 节点可能随分类切换被重建, 委托挂在 document 上就不会丢监听器
+  // (旧实现给每个 tab 单独 addEventListener, 而 tab 每次重建成新节点,
+  //  监听器随之丢失 -> 点分类没反应)。
   document.addEventListener('click', e => {
-    const btn = e.target && e.target.closest ? e.target.closest('[data-buy]') : null;
+    const t = e.target;
+    if (!t || !t.closest) return;
+
+    const tabEl = t.closest('[data-tab]');
+    if (tabEl) {
+      const i = Number(tabEl.getAttribute('data-tab'));
+      if (Number.isInteger(i) && i >= 0 && i < BUY_CATEGORIES.length) {
+        buyTab = i;
+        renderBuyMenu();
+      }
+      return;
+    }
+
+    const btn = t.closest('[data-buy]');
     if (!btn || !btn.getAttribute) return;
     const id = btn.getAttribute('data-buy');
     if (!id) return;
@@ -884,6 +948,11 @@ async function boot() {
         S.player.yaw = pv[3];
         S.player.pitch = pv[4];
       }
+      // 自动化模式没有用户手势, 但必须把开始遮罩真正隐藏 ——
+      // 它 z-index:100 覆盖在 HUD(z-index:10) 之上, 只设 S.started=true
+      // 而留着遮罩会让购买菜单等 HUD 元素点不到 (elementFromPoint 命中遮罩)。
+      show(D.start, false);
+      show(D.loading, false);
       window.__CS_READY__ = true;
     } else {
       show(D.start, true);  // 等待用户手势以启用 Pointer Lock / WebAudio
