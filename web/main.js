@@ -1,5 +1,5 @@
 // web/main.js — DOM HUD / UI / WebAudio / 输入 / 主循环
-// 静态服务器以「项目根目录」为根: /web/index.html, /assets/..., /sfx_*.wav, /radar_v2.png
+// 静态服务器以「项目根目录」为根: /web/index.html, /assets/..., /radar_v2.png
 // asset.js 里的 ROOT='../' / ASSET='../assets/' 相对模块 URL 解析, 无需 import map。
 import * as A from './asset.js';
 import { S, clamp, fmtTime, play, showCenter, setSensitivity } from './state.js';
@@ -97,7 +97,7 @@ function initAudio() {
     const copy = (buf.slice ? buf.slice(0) : buf);
     decodeBuffer(ctx, copy).then(
       decoded => { buffers[name] = decoded; },
-      err => { console.warn(`[audio] 解码失败: sfx_${name}.wav`, err); },
+    err => { console.warn(`[audio] 解码失败: assets/sfx/${name}.wav`, err); },
     );
   }
 }

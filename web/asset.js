@@ -315,9 +315,11 @@ export const PLAYER_MODEL_NAMES = ['leet', 'terror', 'sas', 'urban',
   'w_ak47', 'w_m4a1', 'w_sg552', 'w_aug', 'w_scout', 'w_awp', 'w_g3sg1',
   'w_sg550', 'w_m249', 'w_knife'];
 export const VM_NAMES = Object.keys(VM_SCALE);
-// 根目录 sfx_<key>.wav (见 hlsrc/bake_sound.py 的 MAP)
+// assets/sfx/<key>.wav (见 hlsrc/bake_sound.py 的 MAP)
 export const SFX_NAMES = [
   // 通用
+    'reload',
+    'knife',
   'hit', 'head', 'kill', 'hurt', 'empty', 'buy', 'win', 'lose', 'footstep',
   'explode', 'flash', 'pin', 'c4_beep', 'c4_plant', 'c4_defuse', 'radio', 'deploy',
   // 每把武器的开火音 (CS 1.5 原版, AK 与 M4 是两套完全不同的枪声)
@@ -1602,7 +1604,7 @@ export async function loadAll(onProgress = null) {
     key, await loadTexture(`${ASSET}sky/des_${key}.png`, SKY_TEX),
   ])));
   job('sfx', Promise.all(SFX_NAMES.map(async name => [
-    name, await fetchBuffer(`${ROOT}sfx_${name}.wav`),
+    name, await fetchBuffer(`${ASSET}sfx/${name}.wav`),
   ])));
   // radar_v2.png 在项目根目录, 不在 assets/
   job('radar', loadTexture(`${ROOT}radar_v2.png`, RADAR_TEX));

@@ -1,15 +1,18 @@
-"""从原版 CS 1.5 安装目录提取真实音效, 复制到项目根目录并改名 sfx_<key>.wav"""
+"""从原版 CS 1.5 安装目录提取真实音效, 输出到 assets/sfx/<key>.wav。
+
+历史: 早期版本把 64 个 wav 直接倒在项目根目录, 和入口脚本 serve.py、
+radar_v2.png 混在一起, 既难浏览也容易误改。现在统一收进 assets/sfx/,
+文件名也不再带 sfx_ 前缀 (目录名已经表达了)。
+"""
 import os
 import shutil
 from pathlib import Path
 
 CS = Path(r"C:\GTGame\cs反恐精英1.5\cstrike\sound")
-DST = Path(__file__).resolve().parent.parent
+DST = Path(__file__).resolve().parent.parent / 'assets' / 'sfx'
 
 # key -> (相对 sound 目录的路径, 备选列表)
 MAP = {
-    'shot':   ['weapons/ak47-1.wav', 'weapons/m4a1-1.wav'],
-    'awp':    ['weapons/awp1.wav'],
     'hit':    ['player/bhit_flesh-1.wav'],
     'head':   ['player/headshot1.wav'],
     'kill':   ['player/headshot2.wav'],
@@ -33,7 +36,6 @@ MAP = {
     # CS 1.5 里 AK 与 M4 是两套完全不同的枪声, 混用会听不出手里拿的是哪把。
     'fire_glock18':   ['weapons/glock18-1.wav'],
     'fire_usp':       ['weapons/usp1.wav'],
-    'fire_usp_sil':   ['weapons/usp_unsil-1.wav'],
     'fire_p228':      ['weapons/p228-1.wav'],
     'fire_deagle':    ['weapons/deagle-1.wav'],
     'fire_elite':     ['weapons/elite_fire.wav'],
@@ -47,7 +49,6 @@ MAP = {
     'fire_p90':       ['weapons/p90-1.wav'],
     'fire_ak47':      ['weapons/ak47-1.wav'],
     'fire_m4a1':      ['weapons/m4a1-1.wav'],
-    'fire_m4a1_sil':  ['weapons/m4a1_unsil-1.wav'],
     'fire_sg552':     ['weapons/sg552-1.wav'],
     'fire_aug':       ['weapons/aug-1.wav'],
     'fire_scout':     ['weapons/scout_fire-1.wav'],
@@ -79,6 +80,7 @@ MAP = {
 
 
 def main():
+    DST.mkdir(parents=True, exist_ok=True)
     ok, miss = [], []
     for key, cands in MAP.items():
         src = None
@@ -90,7 +92,7 @@ def main():
         if src is None:
             miss.append((key, cands))
             continue
-        dst = DST / ('sfx_%s.wav' % key)
+        dst = DST / ('%s.wav' % key)
         shutil.copyfile(src, dst)
         ok.append((key, src.name, dst.stat().st_size))
     for k, n, s in ok:

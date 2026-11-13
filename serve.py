@@ -5,8 +5,8 @@
     python serve.py            # 默认 http://127.0.0.1:8080/web/
     python serve.py 9000       # 指定端口
 
-以项目根目录为文档根, 这样 /web/*.js 里的 ../assets/、../sfx_*.wav
-与 ../radar_v2.png 都能正确解析。二进制资产不使用 gzip/缓存, 方便调试。
+以项目根目录为文档根, 这样 /web/*.js 里的 ../assets/ 与 ../radar_v2.png
+都能正确解析。音效统一放在 assets/sfx/ 下。二进制资产不使用 gzip/缓存, 方便调试。
 
 安全: 只放行游戏真正需要的路径 (白名单)。SimpleHTTPRequestHandler 会把
 文档根下的一切都暴露出去 —— 包括 .git/ 目录、hlsrc/ 烘焙脚本、_tools/
@@ -41,6 +41,7 @@ ALLOW_PREFIXES = (
     'assets/sky/',      # 天空盒六面
     'assets/player/',   # 人物/武器模型 + 贴图
     'assets/vm/',       # 第一人称枪模
+    'assets/sfx/',      # 音效 (64 个 wav)
 )
 ALLOW_EXACT_ASSETS = {
     'assets/dust2.geo',
@@ -49,7 +50,9 @@ ALLOW_EXACT_ASSETS = {
     'assets/dust2.hit',
     'assets/dust2.meta.json',
 }
-SFX_RE = re.compile(r'^sfx_[a-z0-9_]+\.wav$')
+# 旧版把音效平铺在根目录 (sfx_<key>.wav)。这些路径已废弃, 保留匹配只是为了
+# 在日志里提示迁移, 不再对外提供文件。
+SFX_LEGACY_RE = re.compile(r'^sfx_[a-z0-9_]+\.wav$')
 # 只允许这些扩展名, 防止白名单前缀下混入意外文件
 ALLOW_EXT = {'.html', '.css', '.js', '.mjs', '.json', '.png', '.wav',
              '.geo', '.col', '.hit', '.nav', '.anim'}
@@ -66,8 +69,6 @@ def is_allowed(url_path: str) -> bool:
     if p in ('web', 'web/index.html'):
         return True
     if p in ALLOW_FILES or p in ALLOW_EXACT_ASSETS:
-        return True
-    if SFX_RE.match(p):
         return True
     if any(p.startswith(pre) for pre in ALLOW_PREFIXES):
         return os.path.splitext(p)[1].lower() in ALLOW_EXT
