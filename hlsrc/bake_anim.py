@@ -17,6 +17,7 @@ Format (little endian):
         i16[nframes*totalVerts*3]
 """
 import json
+import math
 import os
 import struct
 import sys
@@ -30,6 +31,51 @@ SRC = r'C:/GTGame/cs反恐精英1.5/cstrike/models/player'
 OUT = os.path.join(BASE, 'assets', 'player')
 PLAYERS = ('leet', 'terror', 'sas', 'urban')
 CLIPS = ('walk', 'run')
+
+
+def flatten_upright(pverts, ref_span_y):
+    """Rotate the pose about its vertical (Z) axis to best match the reference.
+
+    The walk clip is authored with the body turned; left as-is the bot stands
+    sideways and the arms read as splayed wide. We search a small range of yaw
+    angles about Z and keep the one whose Y-span best matches the reference
+    pose. GoldSrc models are Z-up, so Z is the vertical axis here.
+    """
+    if not pverts:
+        return pverts
+    cx = (max(p[0] for p in pverts) + min(p[0] for p in pverts)) / 2
+    cy = (max(p[1] for p in pverts) + min(p[1] for p in pverts)) / 2
+
+    def span_y(deg):
+        ca, sa = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+        lo, hi = 1e9, -1e9
+        for (x, y, _z) in pverts:
+            dx, dy = x - cx, y - cy
+            ny = cy + dx * sa + dy * ca
+            if ny < lo:
+                lo = ny
+            if ny > hi:
+                hi = ny
+        return hi - lo
+
+    best_deg, best_err = 0.0, abs(span_y(0.0) - ref_span_y)
+    for deg in range(-90, 91, 2):
+        err = abs(span_y(deg) - ref_span_y)
+        if err < best_err:
+            best_err, best_deg = err, float(deg)
+    # refine at 0.5 degree resolution around the best coarse angle
+    for step in range(-4, 5):
+        deg = best_deg + step * 0.5
+        err = abs(span_y(deg) - ref_span_y)
+        if err < best_err:
+            best_err, best_deg = err, deg
+
+    ca, sa = math.cos(math.radians(best_deg)), math.sin(math.radians(best_deg))
+    out = []
+    for (x, y, z) in pverts:
+        dx, dy = x - cx, y - cy
+        out.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca, z))
+    return out
 
 
 def main():
@@ -46,16 +92,37 @@ def main():
         model = max(m.models, key=lambda x: len(x.verts))
         seq_names = m.seq_names()
 
+        # 关键: 所有帧必须共用同一个归一化变换。
+        # 早期实现每帧用"当前帧自己的包围盒"求 lo/hi/centre, 走路时手臂
+        # 外摆会让包围盒变宽 -> 每帧缩放不同, 结果手臂被横向拉宽 (实测
+        # 动画 X 跨度为静态的 2.4 倍, 看起来就是"双臂展开"), 而且整体大小
+        # 逐帧呼吸。
+        # 现在改为: 用静态姿态 (与 bake_player 同一参考帧) 求一次变换,
+        # 之后所有帧都用它。
+        # 参考序列必须和静态网格一致 (json 里的 pose 字段, 通常是 ref_aim_c4)。
+        # 用 seq=0 会拿到 "dummy" 标定姿态 —— 那个姿态手臂是平举的, 用它做
+        # 归一化参考会让动画的手臂比静态宽 2~3 倍 (就是"双臂展开")。
+        ref_name = meta.get('pose') or 'ref_aim_c4'
+        seqs_all = m.seq_names()
+        ref_seq = seqs_all.index(ref_name) if ref_name in seqs_all else 0
+        ref_pverts = m.posed_verts(model, seq=ref_seq, frame=0)
+        ref_pverts = bake_player.align_head(m, model, ref_pverts, ref_seq, 0, right, up, fwd)
+        ref_span_y = (max(p[1] for p in ref_pverts) - min(p[1] for p in ref_pverts))
+        _ref_c = [(bake_player._dot(p, right),
+                   bake_player._dot(p, up),
+                   bake_player._dot(p, fwd)) for p in ref_pverts]
+        _lo = [min(p[i] for p in _ref_c) for i in range(3)]
+        _hi = [max(p[i] for p in _ref_c) for i in range(3)]
+        _s = 1.0 / (_hi[1] - _lo[1])
+        _cx = (_lo[0] + _hi[0]) / 2
+        _cz = (_lo[2] + _hi[2]) / 2
+
         def normalise(pverts):
+            """用共享的静态参考变换, 保证帧间比例一致。"""
             cverts = [(bake_player._dot(p, right),
                        bake_player._dot(p, up),
                        bake_player._dot(p, fwd)) for p in pverts]
-            lo = [min(p[i] for p in cverts) for i in range(3)]
-            hi = [max(p[i] for p in cverts) for i in range(3)]
-            s = 1.0 / (hi[1] - lo[1])
-            cx = (lo[0] + hi[0]) / 2
-            cz = (lo[2] + hi[2]) / 2
-            return [((c[0] - cx) * s, (c[1] - lo[1]) * s, (c[2] - cz) * s)
+            return [((c[0] - _cx) * _s, (c[1] - _lo[1]) * _s, (c[2] - _cz) * _s)
                     for c in cverts]
 
         def expanded_with_groups(pverts):
@@ -87,7 +154,10 @@ def main():
             frames = []
             for f in idxs:
                 pv = m.posed_verts(model, seq=si, frame=f)
-                pv = bake_player.align_head(m, model, pv, si, 0, right, up, fwd)
+                # 用静态参考序列(seq=0)算头部朝向, 不能用当前动画的 si ——
+                # 否则整个人体会按走路姿态的头向被旋转, 手臂会外展。
+                pv = bake_player.align_head(m, model, pv, ref_seq, 0, right, up, fwd)
+                pv = flatten_upright(pv, ref_span_y)
                 flat, groups = expanded_with_groups(normalise(pv))
                 if group_counts is None:
                     group_counts = groups
