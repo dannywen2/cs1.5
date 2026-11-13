@@ -26,6 +26,7 @@ let vmScene = null, vmCamera = null, vmGroup = null, vmRoot = null, vmWrapper = 
 let muzzle = null, muzzleUntil = 0, vmWeapon = null;
 let vmBasePos = [0, 0, 0], vmBaseRot = [0, 0, 0], vmSwing = 0;
 let lastFootstep = 0;      // 上一个脚步声编号, 避免连续重复
+let defuseAmt = 0;         // 拆弹/下包姿态过渡量 0..1
 let engineTime = 0;
 
 // 相机欧拉参数由 calibrateCamera() 实测确定 (不写死符号, 便于换 three.js 版本)
@@ -569,6 +570,20 @@ function reloadPose(t) {
   };
 }
 
+// 拆弹 / 下包时的手部姿态 (CS 1.5 会明显把枪收下去俯身操作)。
+// amt 0..1 是动作的过渡量, 避免瞬间切换。
+function defusePose(amt) {
+  const k = Math.max(0, Math.min(1, amt));
+  return {
+    drop: 0.85 * k,
+    roll: 0.7 * k,
+    pitch: 20 * k * Math.PI / 180,
+    yaw: 14 * k * Math.PI / 180,
+    forward: 0.10 * k,
+  };
+}
+
+
 function updateVM(dt, moving) {
   if (!vmRoot) return;
   const a = S.vmAnim;
@@ -598,14 +613,22 @@ function updateVM(dt, moving) {
       play('footstep' + n);
     }
   }
-  // 相机空间 y 向下为负 -> 下沉即减小 y
-  vmRoot.position.y = baseY - rp.drop * 0.16;
+  // 拆弹/下包姿态: 按住 E 拆包时把枪收下去并俯身。
+  // S.defuseHeld 由输入层维护, BOMB.state 决定现在是否真的在操作。
+  const wantDefuse = (S.defuseHeld && !S.player.dead && !S.buyMenuOpen &&
+                      (S.BOMB.state === 'planted' || S.BOMB.state === 'live')) ? 1 : 0;
+  // 0.25 秒的淡入淡出, 避免动作瞬间弹出
+  defuseAmt += (wantDefuse - defuseAmt) * Math.min(1, dt * 4);
+  const dp = defusePose(defuseAmt);
 
-  vmRoot.rotation.x = vmBaseRot[0] - 1.5 * wp.recoil * a.recoil * DEG + rp.pitch;
-  vmRoot.rotation.y = vmBaseRot[1] + rp.yaw;
-  vmRoot.rotation.z = vmBaseRot[2] - 40 * vmSwing * DEG - rp.roll * 8 * DEG;
+  // 相机空间 y 向下为负 -> 下沉即减小 y
+  vmRoot.position.y = baseY - (rp.drop + dp.drop) * 0.16;
+
+  vmRoot.rotation.x = vmBaseRot[0] - 1.5 * wp.recoil * a.recoil * DEG + rp.pitch + dp.pitch;
+  vmRoot.rotation.y = vmBaseRot[1] + rp.yaw + dp.yaw;
+  vmRoot.rotation.z = vmBaseRot[2] - 40 * vmSwing * DEG - (rp.roll + dp.roll) * 8 * DEG;
   // 后坐向相机方向回缩: 相机空间 z 为负, 回缩即 z 增大
-  vmRoot.position.z = vmBasePos[2] + 0.08 * a.dip + rp.forward;
+  vmRoot.position.z = vmBasePos[2] + 0.08 * a.dip + rp.forward + dp.forward;
   if (muzzle) muzzle.visible = engineTime < muzzleUntil;
 }
 
