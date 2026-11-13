@@ -203,17 +203,19 @@ export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg
 //   right/toCam 枪身在屏幕右下方偏移量 (相机空间)
 // ---------------------------------------------------------------------------
 export const VM_TUNE = {
-  // right/down: 枪身在屏幕上的落点。目标是让枪托落在右下角、枪口指向
-  //             画面中心偏右上方 —— 这是 CS 1.5 第一人称的典型构图。
-  // heightPct:  目标屏幕高度占比
-  // toCam:      距相机距离 (太近会透视畸变, 太远又显得"枪离得远")
-  pistol:   { heightPct: 40, right: 0.30, down: -0.34, toCam: 0.86, rot: [0, -8, 8] },
-  smg:      { heightPct: 38, right: 0.30, down: -0.32, toCam: 0.90, rot: [-4, -9, 7] },
-  rifle:    { heightPct: 38, right: 0.29, down: -0.32, toCam: 0.90, rot: [-6, -8, 7] },
-  shotgun:  { heightPct: 39, right: 0.30, down: -0.33, toCam: 0.89, rot: [-5, -8, 7] },
-  sniper:   { heightPct: 37, right: 0.29, down: -0.31, toCam: 0.92, rot: [-4, -8, 7] },
-  mg:       { heightPct: 38, right: 0.29, down: -0.34, toCam: 0.90, rot: [-6, -8, 7] },
-  knife:    { heightPct: 42, right: 0.34, down: -0.34, toCam: 0.82, rot: [0, -8, 7] },
+  // 目标是"枪托贴住右下角": 原版 CS 第一人称里, 手臂从画面右下角伸进来,
+  // 掌心/护木在下方偏右, 枪管斜向中心。实测判据用画面差分量的 bbox:
+  // 要求 x1 接近 1.0 (贴着右边缘)、y1 接近 1.0 (贴着下边缘)。
+  //
+  // right/down 是相机空间的偏移; 正值 right 向右, 负值 down 向下。
+  // heightPct 是目标屏幕高度占比; toCam 是距相机距离 (太近会有透视畸变)。
+  pistol:   { heightPct: 44, right: 0.7, down: -0.40, toCam: 0.80, rot: [0, -6, 5] },
+  smg:      { heightPct: 44, right: 0.7, down: -0.42, toCam: 0.82, rot: [-3, -7, 5] },
+  rifle:    { heightPct: 44, right: 0.69, down: -0.40, toCam: 0.82, rot: [-5, -6, 5] },
+  shotgun:  { heightPct: 45, right: 0.7, down: -0.39, toCam: 0.81, rot: [-4, -6, 5] },
+  sniper:   { heightPct: 42, right: 0.69, down: -0.41, toCam: 0.84, rot: [-3, -6, 5] },
+  mg:       { heightPct: 44, right: 0.69, down: -0.39, toCam: 0.82, rot: [-5, -6, 5] },
+  knife:    { heightPct: 46, right: 0.74, down: -0.42, toCam: 0.78, rot: [0, -6, 5] },
 };
 
 // 逐武器缩放修正因子。
@@ -224,38 +226,51 @@ export const VM_TUNE = {
 // (measure 脚本), 让每把枪最终都落在 VM_TUNE 的目标高度上。
 // 改动模型/旋转后需要重新测量并更新此表。
 export const VM_FIT = {
-  knife: 17.5200,
-  glock18: 0.8951,
-  usp: 1.6913,
-  p228: 1.1986,
-  deagle: 1.3630,
-  elite: 0.8754,
-  fiveseven: 1.2091,
-  m3: 1.0100,
-  xm1014: 1.3780,
-  tmp: 1.6058,
-  mac10: 1.4766,
-  mp5: 1.3497,
-  ump45: 1.2594,
-  p90: 1.2902,
-  ak47: 1.1289,
-  m4a1: 1.8646,
-  sg552: 1.3959,
-  aug: 1.4977,
-  scout: 1.7941,
-  awp: 1.6284,
-  g3sg1: 1.9673,
-  sg550: 1.7850,
-  m249: 1.3451,
+  knife: 38.0559,
+  glock18: 0.9334,
+  usp: 1.6035,
+  p228: 1.1297,
+  deagle: 1.2792,
+  elite: 0.8322,
+  fiveseven: 1.1539,
+  m3: 1.0616,
+  xm1014: 1.3373,
+  tmp: 1.5135,
+  mac10: 1.4670,
+  mp5: 1.2832,
+  ump45: 1.2027,
+  p90: 1.1959,
+  ak47: 1.0535,
+  m4a1: 1.8543,
+  sg552: 1.3500,
+  aug: 1.3840,
+  scout: 1.6136,
+  awp: 1.5340,
+  g3sg1: 1.8040,
+  sg550: 1.7203,
+  m249: 1.2789,
+};
+
+// 个别模型的包围盒比例特殊 (Glock 特别高、M3 特别长), 按类别统一摆放会让
+// 它们戳出画面底边。这里只给这些模型一个额外位移, 其余仍用类别默认值。
+export const VM_POS_NUDGE = {
+  glock18: { right: -0.22, down: 0.20 },
+  m3:      { right: -0.03, down: 0.10 },
 };
 
 export function vmLds(wid) {
   const wp = WEAPONS[wid];
   const kind = (wp && wp.kind) || "rifle";
   const base = VM_TUNE[kind] || VM_TUNE.rifle;
+  const out = { ...base };
   const fit = VM_FIT[wid];
-  if (!Number.isFinite(fit)) return base;
-  return { ...base, fit };
+  if (Number.isFinite(fit)) out.fit = fit;
+  const nudge = VM_POS_NUDGE[wid];
+  if (nudge) {
+    if (Number.isFinite(nudge.right)) out.right = base.right + nudge.right;
+    if (Number.isFinite(nudge.down)) out.down = base.down + nudge.down;
+  }
+  return out;
 }
 
 // 兼容旧接口: 仍导出每把枪的显式值, 由 VM_TUNE 派生 (engine.js 已改用
