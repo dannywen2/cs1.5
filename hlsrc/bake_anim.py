@@ -29,7 +29,8 @@ import bake_player    # noqa: E402
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = r'C:/GTGame/cs反恐精英1.5/cstrike/models/player'
 OUT = os.path.join(BASE, 'assets', 'player')
-PLAYERS = ('leet', 'terror', 'sas', 'urban')
+PLAYERS = ('leet', 'terror', 'guerilla', 'arctic',
+           'sas', 'urban', 'gsg9', 'gign')
 CLIPS = ('walk', 'run')
 
 

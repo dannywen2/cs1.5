@@ -31,7 +31,10 @@ import mdl  # noqa: E402
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = r'C:/GTGame/cs反恐精英1.5/cstrike/models/player'
 OUT = os.path.join(BASE, 'assets', 'player')
-PLAYERS = ('leet', 'terror', 'sas', 'urban')
+# CS 1.5 的八套可玩皮肤 (T 四个 / CT 四个)。vip 只有人质模式用, 没有战斗
+# 动画序列, 跳过。
+PLAYERS = ('leet', 'terror', 'guerilla', 'arctic',
+           'sas', 'urban', 'gsg9', 'gign')
 MAX_HALF = 0.25          # 归一化后 x/z 的目标半宽 (32 宽 / 72 高 的碰撞盒)
 
 # 候选姿态: (序列名, blend)。全部取第 0 帧; 按顺序选第一个水平放得下的。

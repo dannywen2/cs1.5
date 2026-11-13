@@ -287,7 +287,10 @@ export const VM_ROT = Object.fromEntries(
 
 
 export const VM_GAIN = 1.55;
-export const PLAYER_MODELS = { t: ['leet', 'terror'], ct: ['sas', 'urban'] };
+export const PLAYER_MODELS = {
+  t:  ['leet', 'terror', 'guerilla', 'arctic'],
+  ct: ['sas', 'urban', 'gsg9', 'gign'],
+};
 
 // bot 手上的枪: 按队伍与武器槽随机取, 全部来自烘焙好的 w_* 资源
 export const BOT_WEAPONS = {
@@ -323,8 +326,10 @@ export const BOMB_SITES = {
   B: cellPos(SITE_CELLS.B[0], SITE_CELLS.B[1], 0),    // [-1528, 0, 2696]
 };
 
-export const PLAYER_BASE_NAMES = ['leet', 'terror', 'sas', 'urban'];
-export const PLAYER_MODEL_NAMES = ['leet', 'terror', 'sas', 'urban',
+export const PLAYER_BASE_NAMES = ['leet', 'terror', 'guerilla', 'arctic',
+                                  'sas', 'urban', 'gsg9', 'gign'];
+export const PLAYER_MODEL_NAMES = ['leet', 'terror', 'guerilla', 'arctic',
+    'sas', 'urban', 'gsg9', 'gign',
   'w_glock18', 'w_usp', 'w_p228', 'w_deagle', 'w_elite', 'w_fiveseven',
   'w_m3', 'w_xm1014', 'w_tmp', 'w_mac10', 'w_mp5', 'w_ump45', 'w_p90',
   'w_ak47', 'w_m4a1', 'w_sg552', 'w_aug', 'w_scout', 'w_awp', 'w_g3sg1',
