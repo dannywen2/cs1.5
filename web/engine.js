@@ -622,7 +622,7 @@ export function shoot() {
     // CS 1.5 匕首: 正面砍 ~55, 背刺秒杀。背刺判定用攻击者与目标的朝向夹角。
     if (hit.kind === 'entity') {
       const e = hit.entity;
-      if (e.team === 'ct') { showCenter('别打队友!', '#ff5050', 0.6); return; }
+      if (e.team === (S.playerTeam || 'ct')) { showCenter('队友!', '#ff5050', 0.6); return; }
       const bp = posOf(e.pos);
       let backstab = false;
       if (bp && Number.isFinite(e.yaw)) {
@@ -698,7 +698,7 @@ export function shoot() {
     const hit = rayHit(origin, _dir, A.BULLET_RANGE);
     if (hit.kind === 'entity') {
       const e = hit.entity;
-      if (e.team === 'ct') {
+      if (e.team === (S.playerTeam || 'ct')) {
         if (!anyEntity) showCenter('别打队友!', '#ff5050', 0.6);
         anyEntity = true;
         continue;

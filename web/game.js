@@ -686,7 +686,9 @@ class Bot {
     callUI('updateEquip');
     callUI('updateAmmo');
     // CT 全灭 / T 全灭 (已安放 C4 则仍须拆弹)
-    if (this.team === 'ct' && S.player.dead && S.allies.length === 0) roundEnd('t', 'killed');
+    if (this.team === (S.playerTeam || 'ct') && S.player.dead && S.allies.length === 0) {
+      roundEnd(enemyTeam(), 'killed');
+    }
     if (this.team === 't' && S.enemies.length === 0 && S.BOMB.spawnLeft <= 0
       && S.BOMB.state === 'live') roundEnd('ct', 'eliminated');
   }
@@ -882,7 +884,7 @@ function notifyKill(killer, victim, headshot) {
 // ---------------------------------------------------------------------------
 export function botTargets(bot) {
   const out = [];
-  if (bot.team === 'ct') {
+  if (bot.team === (S.playerTeam || 'ct')) {
     for (const e of S.enemies) {
       if (e && e.enabled && e.health > 0) out.push({ pos: e.pos, ent: e });
     }
@@ -906,12 +908,36 @@ function spawnPoint(list, used, jitter) {
     base[2] + rand(-jitter, jitter)];
 }
 
+// ---------------------------------------------------------------------------
+// Teams
+//
+// The half-time swap means the player is not always CT, so every place that
+// used to hardcode 'ct' derives from these instead.
+// ---------------------------------------------------------------------------
+export function enemyTeam() {
+  return (S.playerTeam === 't') ? 'ct' : 't';
+}
+
+// In CS the T side always attacks (carries the C4) and CT always defends.
+// The swap changes which TEAM the player is on, not which side attacks.
+export function attackTeam() {
+  return 't';
+}
+
+export function playerIsAttacker() {
+  return (S.playerTeam || 'ct') === 't';
+}
+
 export function spawnBot() {
-  const pos = spawnPoint(A.tSpawns, S.usedBotSpawns, 0.8);
-  const bot = new Bot(pos, S.roundNum, 'attack', null, 't');
+  const team = enemyTeam();
+  // T always attacks and spawns at the T spawns; CT defends at its own spawns.
+  const attacks = (team === 't');
+  const pos = spawnPoint(attacks ? A.tSpawns : A.playerSpawns, S.usedBotSpawns, 0.8);
+  const bot = new Bot(pos, S.roundNum, attacks ? 'attack' : 'defend', null, team);
   S.enemies.push(bot);
   spawnCounter += 1;
-  if (spawnCounter === 1) {
+  // Only the attacking side carries the bomb.
+  if (attacks && spawnCounter === 1) {
     S.BOMB.carrier = bot;
     bot.setCarrier(true);
   }
@@ -920,9 +946,12 @@ export function spawnBot() {
 }
 
 export function spawnAlly() {
-  const pos = spawnPoint(A.playerSpawns, S.usedAllySpawns, 0.7);
-  const post = DEF_POSTS.length ? DEF_POSTS[S.allies.length % DEF_POSTS.length] : null;
-  const bot = new Bot(pos, S.roundNum, 'defend', post, 'ct');
+  const team = S.playerTeam || 'ct';
+  const attacks = (team === 't');
+  const pos = spawnPoint(attacks ? A.tSpawns : A.playerSpawns, S.usedAllySpawns, 0.7);
+  const post = attacks ? null
+    : (DEF_POSTS.length ? DEF_POSTS[S.allies.length % DEF_POSTS.length] : null);
+  const bot = new Bot(pos, S.roundNum, attacks ? 'attack' : 'defend', post, team);
   S.allies.push(bot);
   return bot;
 }
@@ -1062,7 +1091,7 @@ function explodeNade(g) {
       if (!bot.enabled || bot.health <= 0) continue;
       // CS 1.5 默认 mp_friendlyfire 0: 自己的雷不伤队友。子弹路径同样跳过
       // team 'ct' (engine.js); 这里之前漏了, 往队友脚下扔一颗就能刷分刷钱。
-      if (bot.team === 'ct') continue;
+      if (bot.team === (S.playerTeam || 'ct')) continue;
       const t = obj3([bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       const d = dist3(pos, [bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       if (d >= radius || !A.gridClear(eye, t, 8)) continue;
@@ -1220,6 +1249,70 @@ const LOSS_BONUS = [1400, 1900, 2400, 2900, 3400];
 const WIN_BONUS = 3250;
 const BOMB_PLANT_BONUS = 800;      // T 安放 C4 即使输了也有 800 (鼓励下包)
 
+// ---------------------------------------------------------------------------
+// Match structure (CS 1.5 competitive)
+// ---------------------------------------------------------------------------
+export function matchState() {
+  return S.match;
+}
+
+// Decide the winner from the whole-match totals.
+function decideMatchWinner() {
+  const M = S.match;
+  const need = M.roundsPerHalf + 1;          // MR15 -> 16 rounds to win
+  if (M.ctScoreTotal >= need) return 'ct';
+  if (M.tScoreTotal >= need) return 't';
+  const played = M.ctScoreTotal + M.tScoreTotal;
+  if (played >= M.maxRounds) {
+    // Regulation exhausted: higher score wins, equal score is a draw.
+    if (M.ctScoreTotal > M.tScoreTotal) return 'ct';
+    if (M.tScoreTotal > M.ctScoreTotal) return 't';
+    return 'draw';
+  }
+  return null;
+}
+
+// Called once at the end of every round, after S.ctScore / S.tScore changed.
+function updateMatchScore() {
+  const M = S.match;
+  if (M.over) return false;
+
+  // Recompute whole-match totals from the per-half counters.
+  if (M.half === 1) {
+    M.ctScoreTotal = S.ctScore;
+    M.tScoreTotal = S.tScore;
+  } else {
+    M.ctScoreTotal = M.half1CT + S.ctScore;
+    M.tScoreTotal = M.half1T + S.tScore;
+  }
+
+  // Half-time swap FIRST: if this round completed the first half, the totals
+  // above are the final first-half numbers, and the match-winner check below
+  // must not run against them (a team on 15 cannot have "won" yet even if the
+  // total momentarily reads 16 after the swap).
+  const played = M.ctScoreTotal + M.tScoreTotal;
+  if (M.half === 1 && played >= M.roundsPerHalf) {
+    M.half = 2;
+    M.half1CT = M.ctScoreTotal;
+    M.half1T = M.tScoreTotal;
+    S.ctScore = 0;
+    S.tScore = 0;
+    S.playerTeam = S.playerTeam === 'ct' ? 't' : 'ct';
+    S.lossStreak = 0;
+    S.money = 800;                 // 半场重置经济 (pistol round)
+    showCenter('------ 半场结束, 交换攻防 ------', '#ffd678');
+    return false;
+  }
+
+  const winner = decideMatchWinner();
+  if (winner) {
+    M.over = true;
+    M.winner = winner;
+    return true;
+  }
+  return false;
+}
+
 export function roundEnd(winner, reason) {
   const B = S.BOMB;
   if (B.state === 'over') return;
@@ -1258,7 +1351,9 @@ export function roundEnd(winner, reason) {
       msg = `你阵亡了 - 回合失败`;
     }
     // T 已安放 C4 的额外奖励
-    if (B.wasPlanted) { reward += BOMB_PLANT_BONUS; msg += ` (含下包 +$${BOMB_PLANT_BONUS})`; }
+    // 注意: +$800 是 CS 1.5 给 T 方的下包奖励, 而玩家是 CT。
+    // 旧代码把它加进了 S.money (玩家钱包), 等于 CT 挨炸反而多拿钱。
+    // 这里只保留提示文案, 不加钱。
   }
   S.money = Math.min(MONEY_CAP, S.money + reward);
   msg += `  +$${reward}`;
@@ -1266,6 +1361,19 @@ export function roundEnd(winner, reason) {
   callUI('updateEquip');
   callUI('updateAmmo');
   callUI('showSpectate', '');
+  const matchOver = updateMatchScore();
+  if (matchOver) {
+    const M = S.match;
+    if (M.winner === 'draw') {
+      showCenter(`比赛结束 - 平局 ${M.ctScoreTotal}:${M.tScoreTotal}`, '#ffd678');
+    } else {
+      const won = (M.winner === S.playerTeam);
+      showCenter(`比赛结束 - ${M.winner.toUpperCase()} 获胜 ${M.ctScoreTotal}:${M.tScoreTotal}` +
+                 (won ? '  (你赢了!)' : '  (你输了)'), won ? '#78ff78' : '#ff6464');
+      play(won ? 'win' : 'lose');
+    }
+    return;
+  }
   later(nextRound, 4);
 }
 
@@ -1492,9 +1600,10 @@ function priceOf(id) {
 // M4A1/AUG/SG550/USP/fiveseven 是 CT 专用, 其余双方都能买。
 export function canBuyItem(id) {
   const w = A.WEAPONS[id];
-  if (!w) return true;                       // 装备类无队伍限制
-  if (!w.team) return true;
-  return w.team === 'ct';                    // 玩家固定是 CT
+  if (!w) return true;                       // 装备类无队别限制
+  if (!w.team) return true;                  // 双方通用武器
+  // 换边后玩家可能是 T, 所以这里必须跟随 playerTeam 而不是写死 ct。
+  return w.team === (S.playerTeam || 'ct');
 }
 
 export function buyItem(id) {

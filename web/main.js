@@ -556,9 +556,21 @@ function updateHUD() {
   const now = S.time;
 
   setText(D.killText, `击杀: ${S.score}`);
-  setText(D.roundText, `回合 ${S.roundNum}`);
+  {
+    const M = S.match || null;
+    const team = S.playerTeam || 'ct';
+    // Player-perspective score: our side first.
+    const us = team === 'ct' ? (M ? M.ctScoreTotal : S.ctScore) : (M ? M.tScoreTotal : S.tScore);
+    const them = team === 'ct' ? (M ? M.tScoreTotal : S.tScore) : (M ? M.ctScoreTotal : S.ctScore);
+    const halfTag = M && M.half === 2 ? `  下半场` : '';
+    setText(D.roundText, `回合 ${S.roundNum}   ${us} : ${them}${halfTag}`);
+  }
   setText(D.enemyText, `敌人: ${(S.enemies || []).length}`);
-  setText(D.sideText, 'CT  防守');
+  {
+    const team = S.playerTeam || 'ct';
+    const role = team === 'ct' ? 'CT  防守' : 'T  进攻';
+    setText(D.sideText, role);
+  }
   setText(D.allyText, `队友: ${(S.allies || []).length}`);
 
   if (B.state === 'planted') {

@@ -71,6 +71,23 @@ export const S = {
   botsPerRound: 5,
   allyCount: 4,
 
+  // ---- match structure (CS 1.5 competitive rules) ----
+  // MR15: first to 16 wins, 30 rounds max, sides swap after round 15.
+  // playerTeam records which side the player is on so the HUD can show
+  // "CT" or "T" correctly after the half-time swap.
+  playerTeam: 'ct',
+  match: {
+    roundsPerHalf: 15,     // MR15; set to 12 for MR12
+    maxRounds: 30,         // roundsPerHalf * 2
+    half: 1,               // 1 | 2
+    half1CT: 0,            // first-half scores, kept for the totals
+    half1T: 0,
+    ctScoreTotal: 0,       // whole-match totals, NOT reset at half-time
+    tScoreTotal: 0,
+    over: false,
+    winner: null,          // "ct" | "t" | null
+  },
+
   // ---- 回合 / C4 ----
   BOMB: {
     state: 'live',           // live | planted | over
