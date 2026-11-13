@@ -1042,7 +1042,10 @@ export function updateEngine(dt) {
     || held('d', 'D', 'KeyD', 'arrowright', 'ArrowRight');
   updateVM(d, moving && !S.buyMenuOpen && !p.dead);
 
-  const fov = S.scoped ? 22 : A.BASE_FOV;
+  // AWP / 狙击两级变焦: 一级 40 度, 二级 15 度 (CS 1.5)。S.scopeLevel 由
+  // main.js 的 setScope() 维护, 0 表示不瞄。
+  const SCOPE_FOV_BY_LEVEL = [A.BASE_FOV, 40, 15];
+  const fov = SCOPE_FOV_BY_LEVEL[S.scopeLevel || 0] || A.BASE_FOV;
   if (camera.fov !== fov) setFov(fov);
   S.fov = fov;
 

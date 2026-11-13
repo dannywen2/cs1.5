@@ -365,16 +365,46 @@ function applySensitivity(scoped) {
   S.player.sensitivity = scoped ? base * SCOPE_SENS_SCALE : base;
 }
 
+// AWP / 狙击枪两级变焦 (CS 1.5): 40 -> 15 -> 不瞄。
+// 原版 AWP 是三级循环 (两级放大 + 退出), Scout 只有两级。
+const SCOPE_FOV = [null, 40, 15];
+
+function scopedFov() {
+  return SCOPE_FOV[S.scopeLevel || 0] || null;
+}
+
+// on === true  -> 进入/维持瞄准; false -> 完全退出; undefined -> 循环下一级
 function setScope(on) {
-  const active = !!on && S.weapon === 'awp' && !S.player.dead;
-  if (active === !!S.scoped) {
-    applySensitivity(active);
+  const wid = S.weapon;
+  const wp = A.WEAPONS[wid];
+  const canScope = !!wp && !!wp.zoom && !S.player.dead;
+  const maxLevel = wid === 'awp' ? 2 : 1;
+
+  if (!canScope) {
+    S.scopeLevel = 0;
+    S.scoped = false;
+    S.player.scoped = false;
+    applySensitivity(false);
     return;
   }
+
+  if (on === false) {
+    S.scopeLevel = 0;
+  } else if (on === true) {
+    if (!S.scopeLevel) S.scopeLevel = 1;
+  } else {
+    // cycle: 1 -> 2 -> 0
+    S.scopeLevel = (S.scopeLevel || 0) + 1;
+    if (S.scopeLevel > maxLevel) S.scopeLevel = 0;
+  }
+
+  const active = S.scopeLevel > 0;
+  const wasActive = !!S.scoped;
   S.scoped = active;
   S.player.scoped = active;
+  S.player.scopeLevel = S.scopeLevel;
   applySensitivity(active);
-  if (active) play('reload');          // 与原版一致: 开镜用咔哒声
+  if (active && !wasActive) play('zoom');   // 开镜咔哒声
 }
 
 // 右键按住开镜 (main.py set_scope(True/False)); toggleScope() 供外部/调试调用。
@@ -645,7 +675,10 @@ function updateHUD() {
   if (S.scoped && (S.weapon !== 'awp' || p.dead)) setScope(false);
   show(D.crosshair, !S.scoped && !S.buyMenuOpen && !p.dead);
   show(D.scopeOverlay, !!S.scoped && S.weapon === 'awp');
-  S.player.sensitivity = S.scoped ? S.player.sensitivityBase * SCOPE_SENS_SCALE : S.player.sensitivityBase;
+  // 放大倍率越高, 鼠标越慢 (与原版一致的观感)
+  const sensScale = S.scopeLevel === 2 ? SCOPE_SENS_SCALE * 0.5
+                  : (S.scopeLevel === 1 ? SCOPE_SENS_SCALE : 1);
+  S.player.sensitivity = S.player.sensitivityBase * sensScale;
 
   // Q 上一把武器: 记录武器切换历史 (包括购买 / 阵亡引起的切换)
   if (shownWeapon !== S.weapon) {
@@ -761,7 +794,7 @@ function initInput() {
   });
   document.addEventListener('mouseup', e => {
     if (e.button === 0) S.mouseDown = false;
-    if (e.button === 2) { S.rightDown = false; setScope(false); }
+    if (e.button === 2) { S.rightDown = false; /* CS: 松开不退出, 保留放大级 */ }
   });
   document.addEventListener('contextmenu', e => e.preventDefault());
 
@@ -776,7 +809,7 @@ function initInput() {
         else shoot();
       } else if (e.button === 2) {
         S.rightDown = true;
-        setScope(true);              // 按住右键开镜, 松开 / 丢失锁定即关闭
+        setScope();                  // 右键循环变焦级 (CS 1.5 行为)
       }
     });
   }

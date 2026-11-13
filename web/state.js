@@ -53,6 +53,7 @@ export const S = {
   reloadStartedAt: 0,
   reloadDuration: 1.6,
   scoped: false,
+  scopeLevel: 0,          // AWP 变焦级数: 0 = 不瞄, 1 = 一级, 2 = 二级
   crossHeat: 0,
   stepTimer: 0,
   vmAnim: { t: 0, recoil: 0, dip: 0 },
