@@ -33,49 +33,68 @@ PLAYERS = ('leet', 'terror', 'sas', 'urban')
 CLIPS = ('walk', 'run')
 
 
-def flatten_upright(pverts, ref_span_y):
-    """Rotate the pose about its vertical (Z) axis to best match the reference.
+def solve_upright_angle(cam_verts, ref_span_x):
+    """Yaw about CAMERA-Y making the camera-X span match the reference.
 
-    The walk clip is authored with the body turned; left as-is the bot stands
-    sideways and the arms read as splayed wide. We search a small range of yaw
-    angles about Z and keep the one whose Y-span best matches the reference
-    pose. GoldSrc models are Z-up, so Z is the vertical axis here.
+    cam_verts are already in camera space (right/up/forward basis); camera-X is
+    the horizontal screen axis, so that is the span that must match. Solved ONCE
+    per clip — see the module docstring for why per-frame solving spins the body.
     """
-    if not pverts:
-        return pverts
-    cx = (max(p[0] for p in pverts) + min(p[0] for p in pverts)) / 2
-    cy = (max(p[1] for p in pverts) + min(p[1] for p in pverts)) / 2
+    if not cam_verts:
+        return 0.0
+    cx = (max(p[0] for p in cam_verts) + min(p[0] for p in cam_verts)) / 2
+    cz = (max(p[2] for p in cam_verts) + min(p[2] for p in cam_verts)) / 2
 
-    def span_y(deg):
+    def span_x(deg):
         ca, sa = math.cos(math.radians(deg)), math.sin(math.radians(deg))
         lo, hi = 1e9, -1e9
-        for (x, y, _z) in pverts:
-            dx, dy = x - cx, y - cy
-            ny = cy + dx * sa + dy * ca
-            if ny < lo:
-                lo = ny
-            if ny > hi:
-                hi = ny
+        for (x, _y, z) in cam_verts:
+            dx, dz = x - cx, z - cz
+            nx = cx + dx * ca + dz * sa
+            if nx < lo:
+                lo = nx
+            if nx > hi:
+                hi = nx
         return hi - lo
 
-    best_deg, best_err = 0.0, abs(span_y(0.0) - ref_span_y)
-    for deg in range(-90, 91, 2):
-        err = abs(span_y(deg) - ref_span_y)
+    best_deg, best_err = 0.0, abs(span_x(0.0) - ref_span_x)
+    for deg in range(-180, 181, 2):
+        err = abs(span_x(deg) - ref_span_x)
         if err < best_err:
             best_err, best_deg = err, float(deg)
-    # refine at 0.5 degree resolution around the best coarse angle
     for step in range(-4, 5):
         deg = best_deg + step * 0.5
-        err = abs(span_y(deg) - ref_span_y)
+        err = abs(span_x(deg) - ref_span_x)
         if err < best_err:
             best_err, best_deg = err, deg
+    return best_deg
 
-    ca, sa = math.cos(math.radians(best_deg)), math.sin(math.radians(best_deg))
+
+def rotate_cam_y(cam_verts, deg):
+    """Rotate camera-space vertices about camera-Y by a fixed angle."""
+    if not cam_verts or abs(deg) < 1e-6:
+        return cam_verts
+    cx = (max(p[0] for p in cam_verts) + min(p[0] for p in cam_verts)) / 2
+    cz = (max(p[2] for p in cam_verts) + min(p[2] for p in cam_verts)) / 2
+    ca, sa = math.cos(math.radians(deg)), math.sin(math.radians(deg))
     out = []
-    for (x, y, z) in pverts:
-        dx, dy = x - cx, y - cy
-        out.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca, z))
+    for (x, y, z) in cam_verts:
+        dx, dz = x - cx, z - cz
+        out.append((cx + dx * ca + dz * sa, y, cz - dx * sa + dz * ca))
     return out
+
+
+def to_cam(pverts, right, up, fwd):
+    return [(bake_player._dot(p, right), bake_player._dot(p, up),
+             bake_player._dot(p, fwd)) for p in pverts]
+
+
+def from_cam(cam_verts, right, up, fwd):
+    return [(c[0] * right[0] + c[1] * up[0] + c[2] * fwd[0],
+             c[0] * right[1] + c[1] * up[1] + c[2] * fwd[1],
+             c[0] * right[2] + c[1] * up[2] + c[2] * fwd[2])
+            for c in cam_verts]
+
 
 
 def main():
@@ -107,10 +126,11 @@ def main():
         ref_seq = seqs_all.index(ref_name) if ref_name in seqs_all else 0
         ref_pverts = m.posed_verts(model, seq=ref_seq, frame=0)
         ref_pverts = bake_player.align_head(m, model, ref_pverts, ref_seq, 0, right, up, fwd)
-        ref_span_y = (max(p[1] for p in ref_pverts) - min(p[1] for p in ref_pverts))
         _ref_c = [(bake_player._dot(p, right),
                    bake_player._dot(p, up),
                    bake_player._dot(p, fwd)) for p in ref_pverts]
+        # 屏幕横向 = 相机 X 轴, 用它作为宽度基准 (模型 Y 是竖直方向, 不对)
+        ref_span_x = (max(p[0] for p in _ref_c) - min(p[0] for p in _ref_c))
         _lo = [min(p[i] for p in _ref_c) for i in range(3)]
         _hi = [max(p[i] for p in _ref_c) for i in range(3)]
         _s = 1.0 / (_hi[1] - _lo[1])
@@ -151,13 +171,21 @@ def main():
             # 差别, 但数据量降三分之一。保留末帧, 保证循环闭合。
             keep = max(2, int(round(nf * 20.0 / 30.0)))
             idxs = [int(round(i * (nf - 1) / (keep - 1))) for i in range(keep)]
+            # 身体朝向是整段 clip 的属性, 只解一次角 —— 逐帧求解会因为目标函数
+            # 在最优附近很平而在等价解间跳动 (实测相邻帧差 174 度), 走路时人
+            # 会原地打转。
+            _f0 = m.posed_verts(model, seq=si, frame=idxs[0])
+            _f0 = bake_player.align_head(m, model, _f0, ref_seq, 0, right, up, fwd)
+            clip_angle = solve_upright_angle(to_cam(_f0, right, up, fwd), ref_span_x)
             frames = []
             for f in idxs:
                 pv = m.posed_verts(model, seq=si, frame=f)
                 # 用静态参考序列(seq=0)算头部朝向, 不能用当前动画的 si ——
                 # 否则整个人体会按走路姿态的头向被旋转, 手臂会外展。
                 pv = bake_player.align_head(m, model, pv, ref_seq, 0, right, up, fwd)
-                pv = flatten_upright(pv, ref_span_y)
+                # 相机空间绕 Y 轴纠偏 (单角), 再变换回模型空间
+                pv = from_cam(rotate_cam_y(to_cam(pv, right, up, fwd), clip_angle),
+                              right, up, fwd)
                 flat, groups = expanded_with_groups(normalise(pv))
                 if group_counts is None:
                     group_counts = groups

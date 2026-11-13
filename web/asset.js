@@ -378,6 +378,29 @@ const RADAR_TEX = { wrap: THREE.ClampToEdgeWrapping, mipmaps: false, anisotropy:
 // ---------------------------------------------------------------------------
 
 // dust2.nav: <i32 nx><i32 ny><f32 wx0><f32 wy0><f32 cell><u32 n> | n*u32 offs | <u32 m> | m*i16 heights
+// ---------------------------------------------------------------------------
+// 二进制头校验
+//
+// 这些 .nav/.col/.hit/.geo 都是自己烘焙出来的, 但一旦写到一半 (Ctrl-C) 或者
+// 传输被截断, 头部声明的数量就会大于真实数据。旧实现直接拿头部值去
+// new Uint32Array(n) / getInt32(...), 结果是 RangeError 或几 GB 的分配尝试,
+// 而 loadAll 只会整体 reject —— 表现为白屏, 且看不出是哪个文件坏了。
+//
+// assertLen() 在分配之前用真实 byteLength 交叉验证, 不一致就抛出带文件名的
+// 明确错误。
+// ---------------------------------------------------------------------------
+function assertLen(label, bytes, need, cap) {
+  if (!Number.isFinite(need) || need < 0) {
+    throw new Error(`${label}: 头部长度非法 (${need})`);
+  }
+  if (need > bytes) {
+    throw new Error(`${label}: 数据被截断, 需要 ${need} 字节, 实际只有 ${bytes}`);
+  }
+  if (cap !== undefined && need > cap) {
+    throw new Error(`${label}: 头部声明的长度 ${need} 超过合理上限 ${cap}`);
+  }
+}
+
 function parseNav(buffer) {
   const dv = new DataView(buffer);
   const nx = dv.getInt32(0, true);
@@ -386,12 +409,21 @@ function parseNav(buffer) {
   const wy0 = dv.getFloat32(12, true);
   const cell = dv.getFloat32(16, true);
   const n = dv.getUint32(20, true);       // nx*ny + 1
+  // 头部自校验: 24 字节头 + n*4 的偏移表 + 4 字节的层数 + m*2 的高度表
+  assertLen('dust2.nav', buffer.byteLength, 24 + n * 4 + 4, buffer.byteLength);
+  if (nx <= 0 || ny <= 0 || nx * ny > 4e7) {
+    throw new Error(`dust2.nav: 网格尺寸非法 (${nx}x${ny})`);
+  }
+  if (n !== nx * ny + 1) {
+    throw new Error(`dust2.nav: 偏移表长度 ${n} 与网格 ${nx}x${ny} 不符`);
+  }
   let p = 24;
   const offs = new Uint32Array(n);
   for (let i = 0; i < n; i++) offs[i] = dv.getUint32(p + i * 4, true);
   p += n * 4;
   const m = dv.getUint32(p, true);
   p += 4;
+  assertLen('dust2.nav heights', buffer.byteLength - p, m * 2, buffer.byteLength);
   const raw = new Int16Array(m);
   for (let i = 0; i < m; i++) raw[i] = dv.getInt16(p + i * 2, true);
   // 烘焙时自上而下扫描, 每格层高是降序; 逐格排成升序 (offs 长度不变, 可直接复用)
@@ -1089,9 +1121,12 @@ function buildFlow(goalKey) {
   const PW = nav.PW, countPad = nav.countPad, offs = nav.offs, heights = nav.heights;
   // padding 索引偏移: E, W, S(+y), N(-y), SE, SW, NE, NW
   const oE = 1, oW = -1, oS = PW, oN = -PW;
-  const PAD_OFF = [oE, oW, oS, oN, oS + oE, oS + oW, oN + oE, oN + oW];
-  const ORTHO_A = [0, 0, 0, 0, 0, 2, 1, 3];
-  const ORTHO_B = [0, 0, 0, 0, 2, 0, 3, 1];
+  // 顺序必须与 DIR_DX/DIR_DY 一致: E, W, S, N, SE, NE, SW, NW
+  const PAD_OFF = [oE, oW, oS, oN, oS + oE, oN + oE, oS + oW, oN + oW];
+  // 每条对角线需要"两侧正交格都通"才算可通行。索引指向 E=0/W=1/S=2/N=3:
+  //   SE -> E+S, NE -> E+N, SW -> W+S, NW -> W+N
+  const ORTHO_A = [0, 0, 0, 0, 0, 0, 1, 1];
+  const ORTHO_B = [0, 0, 0, 0, 2, 3, 2, 3];
 
   while (heap.n > 0) {
     const ck = heap.popValue();
@@ -1265,15 +1300,16 @@ export function findPath(a, b, aLayer = 0, bLayer = 0, out = null) {
     const nlsS = countPad[padIdx + PW], nlsN = countPad[padIdx - PW];
     const nlsSE = countPad[padIdx + PW + 1], nlsSW = countPad[padIdx + PW - 1];
     const nlsNE = countPad[padIdx - PW + 1], nlsNW = countPad[padIdx - PW - 1];
-    const nlsArr = [nlsE, nlsW, nlsS, nlsN, nlsSE, nlsSW, nlsNE, nlsNW];
+    const nlsArr = [nlsE, nlsW, nlsS, nlsN, nlsSE, nlsNE, nlsSW, nlsNW];
 
     for (let d = 0; d < 8; d++) {
       const nls = nlsArr[d];
       if (!nls) continue;
       // 斜向必须两个正交邻格都通, 否则就是切墙角
       if (d >= 4) {
-        const q1 = d === 4 ? nlsE : d === 5 ? nlsS : d === 6 ? nlsW : nlsN;
-        const q2 = d === 4 ? nlsS : d === 5 ? nlsE : d === 6 ? nlsN : nlsW;
+        // d: 4=SE 5=NE 6=SW 7=NW, 需要对应的两条正交邻边都通
+        const q1 = d === 4 || d === 5 ? nlsE : nlsW;
+        const q2 = d === 5 || d === 7 ? nlsN : nlsS;
         if (!q1 || !q2) continue;
       }
       const ncx = cx + DIR_DX[d], ncy = cy + DIR_DY[d];

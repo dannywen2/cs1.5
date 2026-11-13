@@ -654,7 +654,10 @@ class Bot {
     try { this.visual.setHitFlash(true); } catch (_) { /* 占位模型可忽略 */ }
     const bar = this.visual.hpBar;
     if (bar) {
-      bar.scale.x = Math.max(0.01, this.health / this.maxHealth);
+      // hpBar.scale.x 已被 engine.js 设成 1/32, 用来抵消父级的非等比缩放;
+      // 这里要在它的基础上按血量比例缩放, 不能直接覆盖。
+      const baseX = bar.userData.baseScaleX || (bar.userData.baseScaleX = bar.scale.x);
+      bar.scale.x = baseX * Math.max(0.01, this.health / this.maxHealth);
       if (bar.material && bar.material.color) bar.material.color.setHex(this.health < 40 ? 0xff5050 : 0x50ff50);
     }
     if (this.health <= 0) this.die(headshot, killer);
@@ -1057,6 +1060,9 @@ function explodeNade(g) {
   if (g.kind === 'he') {
     for (const bot of S.enemies.concat(S.allies).slice()) {
       if (!bot.enabled || bot.health <= 0) continue;
+      // CS 1.5 默认 mp_friendlyfire 0: 自己的雷不伤队友。子弹路径同样跳过
+      // team 'ct' (engine.js); 这里之前漏了, 往队友脚下扔一颗就能刷分刷钱。
+      if (bot.team === 'ct') continue;
       const t = obj3([bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       const d = dist3(pos, [bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       if (d >= radius || !A.gridClear(eye, t, 8)) continue;
@@ -1094,7 +1100,31 @@ function updateGrenades(dt) {
   for (const g of S.grenades.slice()) {
     g.fuse -= dt;
     g.vel[1] -= A.GRAVITY * dt;
-    for (let a = 0; a < 3; a++) g.pos[a] += g.vel[a] * dt;
+
+    // 对"本帧位移"做一次射线检测, 命中墙面就反射。之前完全没有碰撞,
+    // 手雷会直接穿墙飞进房间 —— 子弹一直走 raySolidDistance, 这里漏了。
+    const px = g.pos[0], py = g.pos[1], pz = g.pos[2];
+    const vx = g.vel[0] * dt, vy = g.vel[1] * dt, vz = g.vel[2] * dt;
+    const stepLen = Math.hypot(vx, vy, vz);
+    if (stepLen > 1e-6) {
+      const hit = A.raySolidDistance(px, py, pz, vx, vy, vz, stepLen);
+      if (hit >= 0 && hit < stepLen) {
+        // 逐轴试探判断撞的是哪一面 (小步长下等价于按轴反射)
+        const blockedX = Math.abs(vx) > 1e-6 &&
+          A.raySolidDistance(px, py, pz, vx, 0, 0, Math.abs(vx)) >= 0;
+        const blockedZ = Math.abs(vz) > 1e-6 &&
+          A.raySolidDistance(px, py, pz, 0, 0, vz, Math.abs(vz)) >= 0;
+        const blockedY = Math.abs(vy) > 1e-6 &&
+          A.raySolidDistance(px, py, pz, 0, vy, 0, Math.abs(vy)) >= 0;
+        if (blockedX) g.vel[0] = -g.vel[0] * 0.45;
+        if (blockedZ) g.vel[2] = -g.vel[2] * 0.45;
+        if (blockedY) g.vel[1] = -g.vel[1] * 0.45;
+        // 位置保持在墙前, 避免嵌进几何
+        g.pos[0] = px; g.pos[1] = py; g.pos[2] = pz;
+      } else {
+        g.pos[0] = px + vx; g.pos[1] = py + vy; g.pos[2] = pz + vz;
+      }
+    }
     const c = A.cellOf(g.pos);
     const ground = A.surfaceAt(c[0], c[1], g.pos[1]);
     if (ground !== null && ground !== undefined && g.pos[1] < ground + 4) {
@@ -1243,6 +1273,14 @@ function tickRound(dt) {
   const B = S.BOMB;
   if (B.state === 'over') return;
   if (B.state === 'live') {
+    // 购买菜单只允许在购买窗口内打开。窗口一过就强制关闭 —— 否则玩家
+    // 可以开局按 B 后一直不关, 8 个 bot 全部冻结 (Bot.update 早退) 而回合
+    // 计时照走, 105 秒后 timeout, CT 白拿 +$3250。
+    // 注意不能用「暂停计时」的方式, 那只是换一种拖延。
+    if (S.buyMenuOpen && A.ROUND_TIME - B.roundLeft > BUY_WINDOW) {
+      S.buyMenuOpen = false;
+      callUI('toggleBuy', false);
+    }
     B.roundLeft -= dt;
     const left = Math.max(0, B.roundLeft);
     B.timerText = fmtTime(left);
@@ -1386,7 +1424,10 @@ export function damagePlayer(dmg, armorRatio = 0.5, zone = 'chest') {
     const absorbed = (amount - afterArmor) * 0.5;
     const armorLoss = Math.min(S.player.armor, absorbed);
     S.player.armor = Math.max(0, S.player.armor - armorLoss);
-    amount = afterArmor + (absorbed - armorLoss) * 2 * 0.5;
+    // CS 1.5: flNew = flDamage - armourvalue*2。折算到这里就是
+    // afterArmor + (absorbed - armorLoss)*2 —— 旧代码尾部的 *0.5 把
+    // 这个 *2 抵消了, 护甲被打穿时伤害会被少算近一半。
+    amount = afterArmor + (absorbed - armorLoss) * 2;
     updateEquipText();
   }
   S.player.hp = Math.max(0, Math.round(S.player.hp - amount));
@@ -1408,12 +1449,21 @@ export function onPlayerDeath() {
   S.shootingEnabled = false;
   S.defuseHeld = false;
   S.reloading = false;
-  for (const wid of ['ak47', 'awp']) {
+  // 死亡丢枪: 清空所有主武器/手枪 (CS 1.5 行为), 只留匕首。
+  // 旧实现只删 ak47/awp —— ak47 是 T 专用、玩家永远买不到, 是死代码,
+  // 而 m4a1/aug/scout/mp5 等全都免费跨回合保留。
+  for (const wid of Object.keys(S.owned)) {
+    const wp = A.WEAPONS[wid];
+    if (!wp || wp.slot === 3) continue;          // 保留匕首
     delete S.owned[wid];
     delete S.ammo[wid];
   }
-  if (S.weapon !== 'usp') switchWeapon('usp');
-  else callUI('switchWeapon', 'usp');
+  // 落到一把确实拥有的武器上。旧代码硬切 'usp', 而买过别的手枪后 usp 已从
+  // owned 里删除, switchWeapon 会静默返回, S.weapon 仍指向已被删除的宽枪,
+  // 下回合 giveAmmo 直接补满 —— 等于免费重生一把 AWP。
+  const fallback = S.owned.usp ? 'usp' : (Object.keys(S.owned)[0] || 'knife');
+  S.weapon = fallback;
+  callUI('switchWeapon', fallback);
   updateEquipText();
   showCenter('你已阵亡  ·  观战队友', '#ffa078');
   callUI('showSpectate', '你已阵亡  ·  观战队友');

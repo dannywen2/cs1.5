@@ -149,8 +149,9 @@ function setFov(fov) {
   camera.updateProjectionMatrix();
   skyCamera.fov = fov;
   skyCamera.updateProjectionMatrix();
-  vmCamera.fov = fov;
-  vmCamera.updateProjectionMatrix();
+  // 注意: 不要动 vmCamera.fov。第一人称枪模的摆放距离/缩放是按 BASE_FOV
+  // 反算出来的 (见 buildViewmodel), 一旦跟着开镜改成 22, 枪会被放大 5 倍
+  // 并挤出画面, 只剩一块残片。VM 永远用自己的固定 FOV。
 }
 
 function syncCamera() {
@@ -628,7 +629,10 @@ export function shoot() {
         // 目标朝向 bot.yaw (度, 0 朝 +z); 攻击者相对目标的方位
         const toAtk = Math.atan2(p.pos[0] - bp[0], p.pos[2] - bp[2]) * 180 / Math.PI;
         let diff = ((toAtk - e.yaw) % 360 + 540) % 360 - 180;
-        backstab = Math.abs(diff) < 60;   // 攻击者在目标背后 120° 扇区
+        // toAtk 是"目标 -> 攻击者"的方位角: 站在目标正前方时 diff≈0, 站在
+        // 正后方时 diff≈±180。所以背刺应取 |diff| > 120 (后方 120° 扇区);
+        // 旧代码写成 < 60, 等于正面砍也算背刺 (4 倍伤害秒杀)。
+        backstab = Math.abs(diff) > 120;
       }
       play(backstab ? 'knife_stab' : 'knife');
       const zone = backstab ? 'chest' : hitZoneOf(hit.point, bp);
@@ -827,6 +831,10 @@ export function makeBotMesh(modelName, weaponName) {
     }),
   );
   hpBar.position.set(0, 1.10, 0);
+  // group 的缩放是 (32,72,32): 血条会被纵向拉伸 72/32 = 2.25 倍, 比例从
+  // 13.64:1 变成 30.7:1。补偿方式是把高度方向预先压回去 (乘 32/72),
+  // 而不是给 x/y 各除以父级分量 —— 后者会连整体大小一起改掉。
+  hpBar.scale.set(1, 32 / 72, 1);
   group.add(hpBar);
 
   // 枪口焰: 一块小方片, 只在开火瞬间显示。
@@ -867,10 +875,15 @@ export function makeBotMesh(modelName, weaponName) {
   group.add(flash);
 
   // 受击闪白只切换本 bot 自己材质上的 map
+  // 受击闪白: 只调颜色的加成, 不碰 map / needsUpdate。
+  // 旧实现把 material.map 在 null 与 texture 之间来回切, 会改变 USE_MAP 宏,
+  // 每次命中触发两次完整 shader 重编译 —— 交火时成片卡顿。
   const setHitFlash = on => {
     for (const p of parts) {
-      p.mesh.material.map = on ? null : p.texture;
-      p.mesh.material.needsUpdate = true;
+      const m = p.mesh.material;
+      if (!m || !m.color) continue;
+      if (on) m.color.setRGB(2.2, 2.2, 2.2);      // 过曝泛白
+      else m.color.setRGB(1, 1, 1);
     }
   };
   group.userData.hpBar = hpBar;
