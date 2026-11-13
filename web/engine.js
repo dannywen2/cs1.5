@@ -34,6 +34,7 @@ const holeGeo = new THREE.PlaneGeometry(2, 2);
 const bulletHoles = [];                 // {mesh, point, ttl}
 const botVisuals = new Set();           // makeBotMesh 返回的根组, 用于血条 billboard
 
+const _v3 = new THREE.Vector3();   // 枪模摆放计算的临时向量
 const _dir = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
@@ -420,16 +421,68 @@ export function buildViewmodel(wid) {
   if (A.WEAPONS[wid]) S.weapon = wid;
   disposeVMChildren();
 
-  const scale = A.VM_SCALE[wid] || 0.06;
-  const pos = A.VM_POS[wid] || [0.2, -0.15, 0.3];
-  const rot = (A.VM_ROT[wid] || [0, 0, 0]).map(v => v * DEG);
-  // 烘焙顶点是"x 右 / y 上 / z 前", three 相机看 -z:
-  // 根节点的 z 取反, 内部 wrapper 再以 z=-1 反射顶点, 枪口 +z 才会指向画面深处。
-  vmBasePos = [pos[0], pos[1], -pos[2]];
-  vmBaseRot = [rot[0], -rot[1], -rot[2]];
-  vmRoot.position.set(vmBasePos[0], vmBasePos[1], vmBasePos[2]);
-  vmRoot.scale.setScalar(scale);
-  vmRoot.rotation.set(vmBaseRot[0], vmBaseRot[1], vmBaseRot[2]);
+    // Placement: centre the model, then scale it so its *rendered* vertical
+    // extent matches the per-class target from VM_TUNE.
+    //
+    // Model units are GoldSrc units (a rifle spans 30+ along the barrel), so a
+    // fixed hand-tuned scale per weapon never lines up: measured on-screen
+    // height ranged from 25% to 336%. Here the scale is solved from the
+    // geometry itself, so every weapon of a class ends up the same size.
+    const tune = A.vmLds(wid);
+    const dist = Math.max(0.15, tune.toCam);
+    const halfFovTan = Math.tan((A.BASE_FOV * DEG) / 2);
+    const rot = tune.rot.map(v => v * DEG);
+
+    // bounding box in baked space
+    let bMinY = Infinity, bMaxY = -Infinity, bMinX = Infinity, bMaxX = -Infinity;
+    let bMinZ = Infinity, bMaxZ = -Infinity;
+    for (const g of data.groups) {
+      const pa = g.geometry && g.geometry.getAttribute && g.geometry.getAttribute("position");
+      if (!pa) continue;
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+        if (y < bMinY) bMinY = y; if (y > bMaxY) bMaxY = y;
+        if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x;
+        if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
+      }
+    }
+    const cx0 = (bMinX + bMaxX) / 2, cy0 = (bMinY + bMaxY) / 2, cz0 = (bMinZ + bMaxZ) / 2;
+
+    // Solve scale so that (model vertical span * scale) / (dist * tan(fov/2))
+    // equals the target NDC height. Uses the *rotated* vertical extent, which
+    // is what the player actually sees.
+    const euler = new THREE.Euler(rot[0], -rot[1], -rot[2], "XYZ");
+    const q = new THREE.Quaternion().setFromEuler(euler);
+    let minY = Infinity, maxY = -Infinity, maxAbsZ = 0;
+    for (const g of data.groups) {
+      const pa = g.geometry && g.geometry.getAttribute && g.geometry.getAttribute("position");
+      if (!pa) continue;
+      const step = Math.max(1, Math.floor(pa.count / 128));
+      for (let i = 0; i < pa.count; i += step) {
+        _v3.set(pa.getX(i) - cx0, pa.getY(i) - cy0, -(pa.getZ(i) - cz0));
+        _v3.applyQuaternion(q);
+        if (_v3.y < minY) minY = _v3.y;
+        if (_v3.y > maxY) maxY = _v3.y;
+        const az = Math.abs(_v3.z);
+        if (az > maxAbsZ) maxAbsZ = az;
+      }
+    }
+    const spanY = Math.max(1e-4, maxY - minY);
+    const targetNdc = (tune.heightPct / 100) * 2;
+    // Nearest face of the model sits at dist - scale*maxAbsZ; use it for the
+    // projection so the visible size matches the target rather than being
+    // computed from the model centre.
+    const k = targetNdc * maxAbsZ * halfFovTan;
+    let scale = (targetNdc * dist * halfFovTan) / (spanY + k);
+    if (Number.isFinite(tune.fit)) scale *= tune.fit;   // 逐武器实测修正 (见 VM_FIT)
+    scale = Math.max(1e-6, Math.min(scale, 5.0));
+
+    vmBasePos = [tune.right, tune.down, -dist];
+    vmBaseRot = [rot[0], -rot[1], -rot[2]];
+    vmRoot.position.set(vmBasePos[0], vmBasePos[1], vmBasePos[2]);
+    vmRoot.rotation.set(vmBaseRot[0], vmBaseRot[1], vmBaseRot[2]);
+    vmRoot.scale.setScalar(scale);
+    vmWrapper.position.set(-cx0, -cy0, -cz0);
 
   let gi = 0;
   for (const g of data.groups) {
@@ -442,10 +495,16 @@ export function buildViewmodel(wid) {
       }
       col.needsUpdate = true;
     }
-    const mat = new THREE.MeshBasicMaterial({
-      map: g.texture || null, vertexColors: true, side: THREE.DoubleSide,
-      transparent: false, depthTest: false, depthWrite: false,
-    });
+      // Hand/thumb textures use palette index 255 as a cut-out (finger edges,
+      // trigger-guard holes); mdl.py maps that index to alpha=0, so alphaTest
+      // is required or those holes get painted as near-black blotches.
+      // alphaTest (not transparent) keeps the opaque pipeline and render order.
+      const hasAlpha = !!(g.texture && g.hand);
+      const mat = new THREE.MeshBasicMaterial({
+        map: g.texture || null, vertexColors: true, side: THREE.DoubleSide,
+        transparent: false, depthTest: false, depthWrite: false,
+        alphaTest: hasAlpha ? 0.5 : 0,
+      });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false;
     mesh.renderOrder = gi++;   // 枪身按资产组顺序绘制, 枪口焰最后盖上去

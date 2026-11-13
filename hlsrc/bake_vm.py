@@ -17,6 +17,7 @@ import os
 import struct
 import sys
 
+from PIL import Image
 from panda3d.core import PNMImage, Filename
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -108,15 +109,15 @@ def knife_pose_matrix():
 
 
 def save_tex(tex, path):
-    img = PNMImage(tex.width, tex.height, 3)
-    rgba = tex.rgba
-    for y in range(tex.height):
-        for x in range(tex.width):
-            j = (y * tex.width + x) * 4
-            img.setXel(x, tex.height - 1 - y, rgba[j] / 255, rgba[j + 1] / 255,
-                       rgba[j + 2] / 255)
-    img.write(Filename.fromOsSpecific(path))
-
+    # GoldSrc uses palette index 255 as the transparent colour (finger edges,
+    # trigger-guard holes). mdl.py maps that index to alpha=0, so this writer
+    # must store 4 channels: the old 3-channel PNMImage dropped the alpha and
+    # those holes came back as the palette near-black (black blotches on the
+    # first-person hand).
+    mode = 'RGBA'
+    im = Image.frombytes(mode, (tex.width, tex.height), tex.rgba)
+    im = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    im.save(path)
 
 def is_hand(name):
     return os.path.splitext(name.lower().strip())[0] in HAND_STEMS

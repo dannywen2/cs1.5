@@ -246,12 +246,18 @@ class Mdl:
                 pal = bytes(768)
             rgba = bytearray(n * 4)
             for k in range(n):
-                c = px[k] * 3
+                pi = px[k]
+                c = pi * 3
                 j = k * 4
                 rgba[j] = pal[c]
                 rgba[j + 1] = pal[c + 1]
                 rgba[j + 2] = pal[c + 2]
-                rgba[j + 3] = 255
+                # GoldSrc uses palette index 255 as the transparent colour
+                # (finger edges, trigger-guard holes, etc). Palette entry 255
+                # in hand.bmp is a near-black #030303, so writing alpha=255
+                # everywhere painted those holes as black blotches on the
+                # first-person hand.
+                rgba[j + 3] = 0 if pi == 255 else 255
             out.append(MdlTexture(name, w, h, bytes(rgba)))
         return out
 

@@ -190,38 +190,84 @@ export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg
 
 // 每把武器对应的第一人称枪模摆放 (位置/旋转/缩放), 与 bake_vm.py 的规范基配合。
 // 枪身越长 z 越小 (更靠前), 手枪贴近相机。
-export const VM_SCALE = {
-  knife: 0.14,
-  glock18: 0.11, usp: 0.11, p228: 0.115, deagle: 0.11, elite: 0.10, fiveseven: 0.115,
-  m3: 0.055, xm1014: 0.052,
-  tmp: 0.062, mac10: 0.062, mp5: 0.058, ump45: 0.056, p90: 0.058,
-  ak47: 0.058, m4a1: 0.055, sg552: 0.056, aug: 0.056,
-  scout: 0.050, awp: 0.055, g3sg1: 0.052, sg550: 0.048,
-  m249: 0.050,
+// ---------------------------------------------------------------------------
+// 第一人称枪模摆放
+//
+// 旧实现给每把枪手工写死 scale / 位置, 但原版模型的包围盒差异极大
+// (p228 尺寸 6.3, sg550 是 36.8, 差近 6 倍), 手调必然不一致 ——
+// 实测屏幕上占地从 25% 到 336% 都有, 有的枪整个怼在脸上, 有的小得看不清。
+//
+// 现在按类别给出"目标屏幕高度", 运行时用模型包围盒反算缩放与位置
+// (见 engine.js placeViewmodel), 保证同类别武器的观感一致。
+//   heightPct  目标占屏幕高度的比例
+//   right/toCam 枪身在屏幕右下方偏移量 (相机空间)
+// ---------------------------------------------------------------------------
+export const VM_TUNE = {
+  // 类别默认值: heightPct 目标屏幕高度占比, right/down 屏幕偏移, toCam 相机距离
+  pistol:   { heightPct: 42, right: 0.30, down: -0.34, toCam: 0.62, rot: [0, -15, 14] },
+  smg:      { heightPct: 38, right: 0.28, down: -0.30, toCam: 0.66, rot: [-4, -15, 12] },
+  rifle:    { heightPct: 38, right: 0.26, down: -0.30, toCam: 0.66, rot: [-6, -15, 12] },
+  shotgun:  { heightPct: 39, right: 0.28, down: -0.31, toCam: 0.64, rot: [-5, -15, 12] },
+  sniper:   { heightPct: 37, right: 0.26, down: -0.29, toCam: 0.67, rot: [-4, -15, 12] },
+  mg:       { heightPct: 38, right: 0.26, down: -0.32, toCam: 0.66, rot: [-6, -15, 12] },
+  knife:    { heightPct: 44, right: 0.34, down: -0.34, toCam: 0.58, rot: [0, -15, 12] },
 };
-export const VM_POS = {
-  knife: [0.72, -0.18, 1.0],
-  glock18: [0.68, 0.00, 0.95], usp: [0.72, 0.02, 1.0], p228: [0.70, 0.01, 0.98],
-  deagle: [0.70, 0.00, 1.0], elite: [0.66, 0.00, 0.95], fiveseven: [0.70, 0.01, 0.98],
-  m3: [0.66, -0.24, 1.65], xm1014: [0.66, -0.24, 1.70],
-  tmp: [0.68, -0.16, 1.20], mac10: [0.68, -0.16, 1.18], mp5: [0.68, -0.18, 1.32],
-  ump45: [0.68, -0.19, 1.36], p90: [0.68, -0.17, 1.28],
-  ak47: [0.70, -0.22, 1.5], m4a1: [0.69, -0.21, 1.5], sg552: [0.70, -0.22, 1.5], aug: [0.69, -0.21, 1.48],
-  scout: [0.67, -0.20, 1.6], awp: [0.68, -0.20, 1.45], g3sg1: [0.68, -0.21, 1.5], sg550: [0.68, -0.20, 1.52],
-  m249: [0.66, -0.25, 1.55],
+
+// 逐武器缩放修正因子。
+//
+// 解析式只能按包围盒估算竖直跨度, 而原版每把枪的手指/枪托/弹匣形状差异
+// 很大, 实测同一类别内偏差可达 2.4 倍 (AUG 只有目标的 21%, Glock 却超了
+// 62%)。这里记录"实测屏幕占比 / 目标占比"的修正系数, 由一次全武器测量得出
+// (measure 脚本), 让每把枪最终都落在 VM_TUNE 的目标高度上。
+// 改动模型/旋转后需要重新测量并更新此表。
+export const VM_FIT = {
+  knife: 15.170,
+  glock18: 0.761,
+  usp: 1.302,
+  p228: 1.010,
+  deagle: 1.095,
+  elite: 0.981,
+  fiveseven: 1.026,
+  m3: 1.013,
+  xm1014: 1.292,
+  tmp: 1.827,
+  mac10: 1.511,
+  mp5: 1.495,
+  ump45: 1.262,
+  p90: 1.488,
+  ak47: 1.094,
+  m4a1: 2.203,
+  sg552: 1.633,
+  aug: 2.417,
+  scout: 2.473,
+  awp: 1.900,
+  g3sg1: 1.969,
+  sg550: 1.970,
+  m249: 1.459,
 };
-// 角度 (度), 由 Three.js 侧转成弧度
-export const VM_ROT = {
-  knife: [0, -15, 12],
-  glock18: [0, -15, 14], usp: [0, -15, 15], p228: [0, -15, 14],
-  deagle: [0, -15, 14], elite: [0, -15, 13], fiveseven: [0, -15, 14],
-  m3: [-5, -15, 12], xm1014: [-5, -15, 12],
-  tmp: [-4, -15, 12], mac10: [-4, -15, 12], mp5: [-5, -15, 12],
-  ump45: [-5, -15, 12], p90: [-4, -15, 12],
-  ak47: [-6, -15, 12], m4a1: [-6, -15, 12], sg552: [-6, -15, 12], aug: [-6, -15, 12],
-  scout: [-4, -15, 12], awp: [-4, -15, 12], g3sg1: [-5, -15, 12], sg550: [-5, -15, 12],
-  m249: [-6, -15, 12],
-};
+
+export function vmLds(wid) {
+  const wp = WEAPONS[wid];
+  const kind = (wp && wp.kind) || "rifle";
+  const base = VM_TUNE[kind] || VM_TUNE.rifle;
+  const fit = VM_FIT[wid];
+  if (!Number.isFinite(fit)) return base;
+  return { ...base, fit };
+}
+
+// 兼容旧接口: 仍导出每把枪的显式值, 由 VM_TUNE 派生 (engine.js 已改用
+// placeViewmodel 自动换算, 这里仅为外部/调试保留)
+export const VM_SCALE = Object.fromEntries(
+  Object.keys(WEAPONS).map(id => [id, 1 / Math.max(1, vmLds(id).toCam * 30)]));
+export const VM_POS = Object.fromEntries(
+  Object.keys(WEAPONS).map(id => {
+    const t = vmLds(id);
+    return [id, [t.right, t.down, t.toCam]];
+  }));
+export const VM_ROT = Object.fromEntries(
+  Object.keys(WEAPONS).map(id => [id, vmLds(id).rot]));
+
+
 export const VM_GAIN = 1.55;
 export const PLAYER_MODELS = { t: ['leet', 'terror'], ct: ['sas', 'urban'] };
 
