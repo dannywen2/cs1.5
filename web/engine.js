@@ -156,8 +156,70 @@ function setFov(fov) {
   // 并挤出画面, 只剩一块残片。VM 永远用自己的固定 FOV。
 }
 
+// 阵亡后的观战目标: 挑一个存活队友, 每 4 秒或目标死亡时轮换。
+function spectatorTarget() {
+  const sp = S.spectate || (S.spectate = { target: null, index: 0, yaw: 0 });
+  const pool = (S.allies || []).filter(b => b && b.enabled && b.health > 0);
+  if (!pool.length) return null;
+  if (sp.target && sp.target.enabled && sp.target.health > 0 && pool.includes(sp.target)) {
+    return sp.target;
+  }
+  sp.index = (sp.index || 0) % pool.length;
+  sp.target = pool[sp.index];
+  return sp.target;
+}
+
 function syncCamera() {
   const p = S.player;
+
+  // 阵亡 -> 第三人称跟随队友。
+  // 旧实现无论如何都把相机放在玩家位置, 玩家死后位置不变, 相机就卡在尸体里;
+  // bot 走近时会直接穿进模型内部 (实测画面 79.7% 是肤色, 能看到头的内侧)。
+  if (p.dead) {
+    const t = spectatorTarget();
+    if (t) {
+      const sp = S.spectate;
+      // 肩后视角: 目标身后 110 单位、上方 55 单位, 略微偏右
+      const yaw = Number.isFinite(t.yaw) ? t.yaw : 0;
+      const bx = -Math.sin(yaw * DEG), bz = -Math.cos(yaw * DEG);   // 目标背后
+      const rx = Math.cos(yaw * DEG), rz = -Math.sin(yaw * DEG);    // 目标右侧
+      const camX = t.pos[0] + bx * 110 + rx * 24;
+      const camY = t.pos[1] + 55;
+      const camZ = t.pos[2] + bz * 110 + rz * 24;
+      // 防止贴墙时相机穿进墙里
+      let fx = camX, fy = camY, fz = camZ;
+      // 相机与目标之间若被墙挡住, 就退近一点 (用 engine 自己的射线检测)
+      const ex = t.pos[0] - camX, ey = (t.pos[1] + A.EYE_HEIGHT) - camY, ez = t.pos[2] - camZ;
+      const eLen = Math.hypot(ex, ey, ez) || 1;
+      const blocked = typeof A.raySolidDistance === 'function'
+        && A.raySolidDistance(camX, camY, camZ, ex / eLen, ey / eLen, ez / eLen, eLen) >= 0;
+      if (blocked) {
+        // 退回到更靠近目标的位置
+        fx = t.pos[0] + bx * 55 + rx * 12;
+        fy = t.pos[1] + 48;
+        fz = t.pos[2] + bz * 55 + rz * 12;
+      }
+      camera.position.set(fx, fy, fz);
+      // 望向目标头部
+      const dx = t.pos[0] - fx, dy = (t.pos[1] + A.EYE_HEIGHT) - fy, dz = t.pos[2] - fz;
+      const horiz = Math.hypot(dx, dz) || 1;
+      const camYaw = Math.atan2(dx, dz);
+      const camPitch = Math.atan2(dy, horiz);
+      camera.rotation.set(camPitch * pitchSign, camYaw * yawSign + yawOffset, 0, 'YXZ');
+      camera.updateMatrixWorld();
+      skyCamera.quaternion.copy(camera.quaternion);
+      skyCamera.position.set(0, 0, 0);
+      return;
+    }
+    // 没有存活队友: 停在原地但抬高, 避免嵌进尸体
+    camera.position.set(p.pos[0], p.pos[1] + eyeHeight() + 40, p.pos[2]);
+    camera.rotation.set(p.pitch * DEG * pitchSign, p.yaw * DEG * yawSign + yawOffset, 0, 'YXZ');
+    camera.updateMatrixWorld();
+    skyCamera.quaternion.copy(camera.quaternion);
+    skyCamera.position.set(0, 0, 0);
+    return;
+  }
+
   camera.position.set(p.pos[0], p.pos[1] + eyeHeight(), p.pos[2]);
   camera.rotation.set(p.pitch * DEG * pitchSign, p.yaw * DEG * yawSign + yawOffset, 0, 'YXZ');
   camera.updateMatrixWorld();
@@ -1103,7 +1165,8 @@ export function renderFrame() {
   renderer.clearDepth();
   renderer.render(scene, camera);
   renderer.clearDepth();
-  renderer.render(vmScene, vmCamera);
+  // 阵亡后不画第一人称枪模: 那时相机已经跟随队友, 再叠一把枪在脸上很怪
+  if (!S.player.dead) renderer.render(vmScene, vmCamera);
 }
 
 export function getCamera() { return camera; }

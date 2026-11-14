@@ -38,6 +38,8 @@ export const S = {
     hasKit: false,
     nades: { he: 0, flash: 0, smoke: 0 },
     dead: false,
+  // 阵亡观战: 跟随一名存活队友的第三人称视角
+  spectate: { target: null, index: 0, yaw: 0 },
     crouching: false,
     sensitivity: 2.0,        // 倍率 (每像素 0.06 度 x 倍率), 见 engine.js DEG_PER_COUNT
     sensitivityBase: 2.0,    // 用户设定值, 开镜/关镜后恢复到它
