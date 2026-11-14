@@ -446,6 +446,24 @@ class Bot {
     } else if (this.team === 't' && B.state === 'live' && this.carrier && B.targetPos) {
       goal = A.nearestOpen(A.cellOf(B.targetPos));
       goalY = B.targetPos[1];
+      // 残局绕后同样适用于携带者 —— 他才是最需要避开正面预瞄的人。
+      if (this.lastMan) {
+        const siteW = A.cellPos(goal[0], goal[1], 0);
+        const ax = this.pos[0] - siteW[0], az = this.pos[2] - siteW[2];
+        const al = Math.hypot(ax, az) || 1;
+        const px = -az / al, pz = ax / al;
+        const sign = Math.random() < 0.5 ? -1 : 1;
+        const ring2 = ringCells(goal, 3, 11, 14);
+        let best2 = null, bestScore2 = -Infinity;
+        for (const c of ring2) {
+          const w = A.cellPos(c[0], c[1], 0);
+          const ox = w[0] - siteW[0], oz = w[2] - siteW[2];
+          const ol = Math.hypot(ox, oz) || 1;
+          const side = (ox / ol) * px + (oz / ol) * pz;
+          if (side * sign > bestScore2) { bestScore2 = side * sign; best2 = c; }
+        }
+        if (best2) goal = best2;
+      }
     } else if (this.team === 't' && B.state === 'live' && B.drop) {
       goal = A.nearestOpen(A.cellOf(B.drop.pos));
       goalY = B.drop.pos[1];
@@ -468,6 +486,26 @@ class Bot {
       const ring = ringCells(site, 3, 10, 10);
       goal = ring.length ? choice(ring) : site;
       goalY = B.targetPos[1];
+      // 残局绕后: 独自一人时不要沿直线压过去, 而是从侧翼接近,
+      // 这样对面预瞄的正面角度对不上。
+      if (this.lastMan && ring.length) {
+        const siteW = A.cellPos(site[0], site[1], 0);
+        const ax = this.pos[0] - siteW[0], az = this.pos[2] - siteW[2];
+        const al = Math.hypot(ax, az) || 1;
+        // 垂直于"我->包点"的方向上挑一个更远侧翼的点
+        const px = -az / al, pz = ax / al;
+        const sign = Math.random() < 0.5 ? -1 : 1;
+        let best = null, bestScore = -Infinity;
+        for (const c of ring) {
+          const w = A.cellPos(c[0], c[1], 0);
+          const ox = w[0] - siteW[0], oz = w[2] - siteW[2];
+          const ol = Math.hypot(ox, oz) || 1;
+          // 与侧向方向的夹角越小越好 (即绕到侧面)
+          const side = (ox / ol) * px + (oz / ol) * pz;
+          if (side * sign > bestScore) { bestScore = side * sign; best = c; }
+        }
+        if (best) goal = best;
+      }
     } else if (this.role === 'defend' && this.post) {
       goal = this.post;
     } else {
@@ -647,8 +685,10 @@ class Bot {
     }
     this.yaw = yawTo(lookX, lookZ);
 
-    // peek 循环 (有敌情时不做, 保持稳定架枪)
+    // peek 循环: 有敌情时不做; 自己已是最后一人时也不做 ——
+    // 1v1 里探身换不到任何东西, 只会被对面预瞄带走。
     if (kp) { this.peekPhase = 'idle'; return; }
+    if (this.lastMan) { this.peekPhase = 'idle'; return; }
 
     this.peekTimer -= dt;
     if (this.peekTimer > 0) {
@@ -708,6 +748,27 @@ class Bot {
 
   // 投掷手雷。返回 true 表示本帧已经丢了雷 (不再执行其它行动)。
   // 只在"有敌人情报但打不到"时使用 —— 能直接开枪时扔雷是浪费。
+  // 残局判定: 自己是最后一人 / 对面只剩一人。
+  // 1v1 与满员时的最优策略完全不同, 需要单独处理。
+  endgameInfo() {
+    const enemies = this.team === 't' ? S.allies : S.enemies;
+    const allies = this.team === 't' ? S.enemies : S.allies;
+    // allies 数组本身就包含自己 (this 在 S.enemies 或 S.allies 里),
+    // 不能再 +1, 否则满员时永远算多一个, 1v1 判定失效。
+    const allyAlive = allies.filter(b => b && b.enabled).length;
+    // 玩家也算一份战力: 敌方是玩家时 +1
+    const enemyAlive = enemies.filter(b => b && b.enabled).length
+                     + ((this.team === 't' && !S.player.dead) ? 1 : 0);
+    return {
+      enemyAlive,
+      allyAlive,
+      alone: allyAlive <= 1,
+      enemyAlone: enemyAlive <= 1,
+      duel: allyAlive <= 1 && enemyAlive <= 1,
+    };
+  }
+
+
   tryGrenade() {
     if (this.nadeCd > 0) return false;
     if (!this.nades || (this.nades.he <= 0 && this.nades.flash <= 0)) return false;
@@ -920,6 +981,12 @@ class Bot {
     this.scanTimer -= dt;
     if (this.scanTimer <= 0) {
       this.scanTimer = 0.15;
+      // 残局标记: 是否为己方最后一人 (1v1 时策略要变)
+      {
+        const eg = this.endgameInfo();
+        this.lastMan = eg.alone;
+        this.enemyAlone = eg.enemyAlone;
+      }
       this.target = this.pickTarget();
       // 没看到人但听到交火 -> 去支援。
       // 之前没有任何声音传播, 实测 T 打 B 点时守 A 的 CT 会整局不动。
