@@ -604,20 +604,95 @@ class Bot {
     return { pos: copy3(best.pos), ent: best.ent, d: best.d };
   }
 
-  hold() {
+  // 架点: 在 post 锚点附近做"静止观察 -> 侧移 peek -> 回位"的循环。
+  // 旧实现只转身不动, bot 是个完全静止的靶子, 架角的进攻方预瞄必胜。
+  hold(dt) {
     const kp = this.team === 't'
       ? (S.time - S.botKnownTime < 6 ? S.botKnownPos : null)
       : (S.time - this.knownTime < 6 ? this.knownPos : null);
+
+    // 架点锚点: 优先用 post, 没有就用当前位置
+    if (!this.holdAnchor) {
+      this.holdAnchor = [this.pos[0], 0, this.pos[2]];
+      this.peekPhase = 'idle';
+      this.peekTimer = rand(0.6, 1.6);
+      this.peekOffset = null;
+    }
+
+    // 被打乱位置 (推挤/击退) 后拉回锚点
+    if (this.state !== 'combat') {
+      const drift = Math.hypot(this.pos[0] - this.holdAnchor[0],
+                               this.pos[2] - this.holdAnchor[2]);
+      if (drift > 120) {
+        this.holdAnchor = [this.pos[0], 0, this.pos[2]];
+        this.peekPhase = 'idle';
+        this.peekTimer = rand(0.6, 1.6);
+      }
+    }
+
+    // 观察方向: 有敌情就看向敌情, 否则看 watch 点
+    let lookX, lookZ;
     if (kp) {
-      this.yaw = yawTo(kp[0] - this.pos[0], kp[2] - this.pos[2]);
+      lookX = kp[0] - this.pos[0];
+      lookZ = kp[2] - this.pos[2];
+    } else if (this.watch) {
+      const wp = A.cellPos(this.watch[0], this.watch[1], 0);
+      const off = Math.sin(S.time * 0.8) * 4;
+      const dx = wp[0] - this.pos[0], dz = wp[2] - this.pos[2];
+      const len = Math.hypot(dx, dz) || 1;
+      lookX = dx + (-dz / len) * off;
+      lookZ = dz + (dx / len) * off;
+    } else {
       return;
     }
-    if (!this.watch) return;
-    const wp = A.cellPos(this.watch[0], this.watch[1], 0);
-    const dx = wp[0] - this.pos[0], dz = wp[2] - this.pos[2];
-    const len = Math.hypot(dx, dz) || 1;
-    const off = Math.sin(S.time * 0.8) * 4;
-    this.yaw = yawTo(dx + (-dz / len) * off, dz + (dx / len) * off);
+    this.yaw = yawTo(lookX, lookZ);
+
+    // peek 循环 (有敌情时不做, 保持稳定架枪)
+    if (kp) { this.peekPhase = 'idle'; return; }
+
+    this.peekTimer -= dt;
+    if (this.peekTimer > 0) {
+      // 处于返回阶段时走回锚点
+      if (this.peekPhase === 'return') {
+        const bx = this.holdAnchor[0] - this.pos[0];
+        const bz = this.holdAnchor[2] - this.pos[2];
+        const d = Math.hypot(bx, bz);
+        if (d < 8) { this.peekPhase = 'idle'; this.peekTimer = rand(0.6, 1.6); }
+        else {
+          const step = Math.min(d, this.speed * 0.55 * dt);
+          this.moveAxis(bx / d * step, bz / d * step);
+        }
+      }
+      return;
+    }
+
+    if (this.peekPhase === 'idle') {
+      // 选一个垂直于观察方向的侧移方向, 要求落点可走
+      const len = Math.hypot(lookX, lookZ) || 1;
+      const px = -lookZ / len, pz = lookX / len;
+      const dist = 16 + Math.random() * 20;
+      const sign = Math.random() < 0.5 ? -1 : 1;
+      let ox = this.holdAnchor[0] + px * dist * sign;
+      let oz = this.holdAnchor[2] + pz * dist * sign;
+      if (!cellBlockedAt([ox, 0, oz])) {
+        this.peekOffset = [ox, oz];
+        this.peekPhase = 'peek';
+        this.peekTimer = rand(0.5, 1.0);
+      } else {
+        this.peekTimer = rand(0.4, 1.0);   // 旁边走不了, 换个时机再试
+      }
+    } else if (this.peekPhase === 'peek') {
+      const ox = this.peekOffset[0] - this.pos[0];
+      const oz = this.peekOffset[1] - this.pos[2];
+      const d = Math.hypot(ox, oz);
+      if (d < 8) {
+        this.peekPhase = 'return';
+        this.peekTimer = rand(0.5, 1.0);
+      } else {
+        const step = Math.min(d, this.speed * 0.5 * dt);
+        this.moveAxis(ox / d * step, oz / d * step);
+      }
+    }
   }
 
   // 交战反应时间: 按距离与武器类别区分。
@@ -948,7 +1023,7 @@ class Bot {
         this.state = 'move';
         this.repath();
       }
-      this.hold();
+      this.hold(dt);
     }
 
     // 贴地锁定: 取当前格第 layer 层
