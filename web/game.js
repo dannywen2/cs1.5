@@ -190,29 +190,6 @@ function pickNearbyGoal(p, r0, r1) {
   return null;
 }
 
-function computePosts() {
-  const sc = A.SITE_CELLS || {};
-  const a = sc.A || [0, 0], b = sc.B || [0, 0];
-  const posts = ringCells(a, 3, 14, 3).map(c => [c, a])
-    .concat(ringCells(b, 3, 14, 4).map(c => [c, b]));
-  DEF_POSTS = posts.length ? posts : [[a, a], [b, b]];
-  // 全图漫游格在 304x350 上扫描一次即可, 无 nav 数据则退化为空
-  const open = [];
-  const sites = [a, b];
-  const nearSite = [];
-  for (let cy = 0; cy < A.H; cy++) {
-    for (let cx = 0; cx < A.W; cx++) {
-      if (!A.layers(cx, cy).length) continue;
-      open.push([cx, cy]);
-      let md = Infinity;
-      for (const s of sites) md = Math.min(md, Math.hypot(cx - s[0], cy - s[1]));
-      if (md < 14) nearSite.push([cx, cy]);
-    }
-  }
-  ROAM_CELLS = open;
-  T_ROAM_CELLS = nearSite.length ? nearSite : open;
-}
-
 // ---------------------------------------------------------------------------
 // Bot 视觉: makeBotMesh 每次都新建几何; 模型缺失时用简单占位, 绝不抛异常
 // ---------------------------------------------------------------------------
@@ -475,9 +452,13 @@ class Bot {
       goal = A.nearestOpen(A.cellOf(kp));
       goalY = kp[1];
     } else if (this.team === 't' && B.state === 'live' && B.targetPos && !this.carrier) {
+      // 进攻方始终朝包点推进。旧的 pickNearbyGoal 兜底会让它们在自己附近
+      // 随机漂移, 实测 40 秒内 T 与 CT 最近距离从未小于 400 单位 —— 整局
+      // 没有交战。这里固定把包点周边当作目标, 只做小幅去重以免所有 T 走
+      // 完全相同的格子。
       const site = A.cellOf(B.targetPos);
-      const ring = ringCells(site, 3, 9, 8);
-      goal = choice(ring.length ? ring : [site]);
+      const ring = ringCells(site, 3, 10, 10);
+      goal = ring.length ? choice(ring) : site;
       goalY = B.targetPos[1];
     } else if (this.role === 'defend' && this.post) {
       goal = this.post;
@@ -527,7 +508,15 @@ class Bot {
     const w = this.path[0];
     const dx = w[0] - this.pos[0], dz = w[2] - this.pos[2];
     const len = Math.hypot(dx, dz) || 1;
-    const step = this.speed * mult * dt;
+    // 进攻方离包点还很远时给一点速度补偿: T 出生点到包点约 3800 单位,
+    // 按 200 单位/秒要 19 秒纯赶路, 105 秒的回合里几乎没时间交战。
+    let sp = this.speed;
+    if (this.team === 't' && S.BOMB.targetPos) {
+      const far = Math.hypot(S.BOMB.targetPos[0] - this.pos[0],
+                             S.BOMB.targetPos[2] - this.pos[2]);
+      if (far > 1500) sp *= 1.18;
+    }
+    const step = sp * mult * dt;
     if (this.escapeFrames > 0) {
       this.escapeFrames -= 1;
       const nx = this.pos[0] + dx / len * step, nz = this.pos[2] + dz / len * step;
@@ -555,16 +544,29 @@ class Bot {
     if (Math.hypot(dx, dz) > 0.01) this.yaw = yawTo(dx, dz);
   }
 
-  hasLOS(pos) {
-    const dx = pos[0] - this.pos[0], dz = pos[2] - this.pos[2];
-    const len = Math.hypot(dx, dz);
-    if (len > 1) {
-      const f = Math.sin(this.yaw * DEG) * dx / len + Math.cos(this.yaw * DEG) * dz / len;
-      if (f < -0.17) return false;
-    }
+  // 纯几何视线: 只判断中间有没有墙, 不考虑朝向。
+  // 旧实现把"目标必须在正前方 ±100°"混进了 LOS, 而 pickTarget 又在转身之前
+  // 调用它 —— 实测目标在正后方 100 单位、无遮挡时照样返回 null, bot 于是原地
+  // 发呆, 永远发现不了身后的敌人。
+  canSee(pos) {
     const eye = obj3([this.pos[0], this.pos[1] + A.EYE_HEIGHT, this.pos[2]]);
     const tgt = obj3([pos[0], pos[1] + A.EYE_HEIGHT, pos[2]]);
     try { return A.gridClear(eye, tgt, 8); } catch (e) { return false; }
+  }
+
+  // 目标是否已经在视野锥内 (决定要不要开枪 / 是否需要先转身)
+  inFov(pos) {
+    const dx = pos[0] - this.pos[0], dz = pos[2] - this.pos[2];
+    const len = Math.hypot(dx, dz);
+    if (len <= 1) return true;
+    const f = Math.sin(this.yaw * DEG) * dx / len
+            + Math.cos(this.yaw * DEG) * dz / len;
+    return f >= -0.17;              // ±100°
+  }
+
+  // 能看见 = 有视线 且 在视野锥内 (保留给交战判定使用)
+  hasLOS(pos) {
+    return this.canSee(pos) && this.inFov(pos);
   }
 
   pickTarget() {
@@ -572,13 +574,26 @@ class Bot {
     for (const t of botTargets(this)) {
       if (!t || !t.pos) continue;
       const d = dist2(t.pos, this.pos);
-      if (d > 0.01 && d < this.attackRange) cand.push({ d, pos: t.pos, ent: t.ent });
+      if (d <= 0.01 || d > this.attackRange) continue;
+      // 只用几何视线筛选; 朝向交给评分和转身处理, 否则背后的敌人永远发现不了
+      if (!this.canSee(t.pos)) continue;
+
+      // 评分 (越小越优先):
+      //   距离为主项; 正在朝我开火的敌人显著加权; 残血目标优先补枪;
+      //   已在视野锥内的额外加分 (省一次转身, 反应更快)
+      let score = d;
+      const ent = t.ent;
+      if (ent) {
+        if (ent.target && ent.target.ent === this) score -= 260;
+        if (typeof ent.health === 'number' && ent.health < 40) score -= 120;
+      }
+      if (this.inFov(t.pos)) score -= 150;
+      cand.push({ score, d, pos: t.pos, ent });
     }
-    cand.sort((a, b) => a.d - b.d);
-    for (const c of cand.slice(0, 3)) {
-      if (this.hasLOS(c.pos)) return { pos: copy3(c.pos), ent: c.ent, d: c.d };
-    }
-    return null;
+    if (!cand.length) return null;
+    cand.sort((a, b) => a.score - b.score);
+    const best = cand[0];
+    return { pos: copy3(best.pos), ent: best.ent, d: best.d };
   }
 
   hold() {
@@ -597,28 +612,53 @@ class Bot {
     this.yaw = yawTo(dx + (-dz / len) * off, dz + (dx / len) * off);
   }
 
+  // 交战反应时间: 按距离与武器类别区分。
+  // 原实现是固定 0.8~1.5 秒, 与距离/武器无关 —— 贴脸时反应偏慢, 远距离又
+  // 显得反应过快。
+  reactionDelay(dist) {
+    const kind = (A.WEAPONS[this.weaponId] || {}).kind || 'rifle';
+    const base = kind === 'sniper' ? 0.55 : kind === 'smg' ? 0.32
+               : kind === 'pistol' ? 0.38 : 0.42;
+    const distPenalty = Math.min(0.55, Math.max(0, (dist - 120) / 900));
+    return base + distPenalty + rand(0, 0.18);
+  }
+
   combat(to, dist, ent, dt) {
     const len = Math.hypot(to[0], to[2]) || 1;
     const fx = to[0] / len, fz = to[2] / len;
+
+    // 目标不在视野内 -> 先转身, 不要盲目横移
+    const tp = ent ? ent.pos : S.player.pos;
+    if (tp && !this.inFov(tp)) {
+      this.yaw = yawTo(tp[0] - this.pos[0], tp[2] - this.pos[2]);
+    }
+
     this.strafeTimer -= dt;
     if (this.strafeTimer <= 0) {
       this.strafeTimer = rand(0.5, 1.2);
-      this.strafeDir *= -1;
+      // 受伤时更倾向换向, 降低被持续命中的概率
+      if (this.health < this.maxHealth * 0.5 || Math.random() < 0.5) {
+        this.strafeDir *= -1;
+      }
     }
     this.moveAxis(-fz * this.strafeDir * this.speed * 0.5 * dt,
       fx * this.strafeDir * this.speed * 0.5 * dt);
-    if (dist > 420) this.moveAxis(fx * this.speed * 0.55 * dt, fz * this.speed * 0.55 * dt);
-    else if (dist < 120) this.moveAxis(-fx * this.speed * 0.45 * dt, -fz * this.speed * 0.45 * dt);
+
+    // 距离控制: 远压近拉; 残血时优先脱离
+    const hurt = this.health < this.maxHealth * 0.35;
+    if (dist > 420) {
+      this.moveAxis(fx * this.speed * 0.55 * dt, fz * this.speed * 0.55 * dt);
+    } else if (dist < 120 || hurt) {
+      const back = hurt ? 0.7 : 0.45;
+      this.moveAxis(-fx * this.speed * back * dt, -fz * this.speed * back * dt);
+    }
 
     if (this.fireTimer > 0) return;
-    const tp = ent ? ent.pos : S.player.pos;
-    const clearShot = tp ? this.hasLOS(tp) : false;
-    if (!clearShot) {
+    if (!tp || !this.hasLOS(tp)) {
       this.fireTimer = 0.3;
       return;
     }
-    this.fireTimer = rand(0.8, 1.5);
-    // 每把 bot 用自己的枪声与伤害 (CS 1.5 里 AWP 的枪声和 AK 完全不同)
+    this.fireTimer = this.reactionDelay(dist);
     const wstat = A.WEAPONS[this.weaponId] || A.WEAPONS.ak47;
     play(wstat.sfx || 'fire_ak47');
     if (this.visual.flash) {
@@ -626,13 +666,11 @@ class Bot {
       this.visual.flash.rotation.z = rand(0, Math.PI / 2);
       this.muzzleUntil = S.time + 0.06;
     }
-    const hitChance = Math.max(0.18, 0.82 - dist * 0.00065);
+    let hitChance = Math.max(0.14, 0.82 - dist * 0.00065);
+    if (dist > 700) hitChance *= 0.72;
+    else if (dist > 450) hitChance *= 0.86;
     if (Math.random() >= hitChance) return;
-    // 伤害按武器基础值缩放 (bot 命中率已单独建模, 所以这里不叠部位倍率,
-    // 否则 AK 一发就能秒人, 手感会变成"子弹海绵"反过来的那种不合理)
     const base = wstat.dmg * Math.max(1, wstat.pellets | 0 || 1) * 0.28;
-    // 约 12% 的命中打在头部 —— 这样"头盔"才真正决定生死:
-    // 没头盔时爆头吃全额, 有头盔才吃护甲减免 (见 damagePlayer 的 zone 参数)。
     const headshot = Math.random() < 0.12;
     const raw = Math.max(3, Math.round(base * rand(0.75, 1.25)));
     const dmg = headshot ? Math.round(raw * 2.5) : raw;
@@ -793,7 +831,9 @@ class Bot {
       this.holdTimer -= dt;
       if (this.holdTimer <= 0) {
         const fresh = S.botKnownPos && S.time - S.botKnownTime < 10;
-        this.state = fresh ? 'hunt' : 'move';
+        // 进攻方即使没有敌人情报也要继续压向包点, 不能退化成原地巡逻
+        if (fresh) this.state = 'hunt';
+        else this.state = 'move';
         this.repath();
       }
     } else if (this.state === 'hold') {
@@ -1727,11 +1767,67 @@ export function updateEquipText() { callUI('updateEquip'); }
 // ---------------------------------------------------------------------------
 // 初始化 / 每帧
 // ---------------------------------------------------------------------------
+function computePosts() {
+  const sc = A.SITE_CELLS || {};
+  const a = sc.A || [0, 0], b = sc.B || [0, 0];
+
+  // 生成"空间分散"的防守点。
+  // 旧实现 ringCells(a,3,14,3) 只给每个点取 3 个格子, 4 个 CT 里常有 3 个
+  // 分到几乎同一格 (实测 post 中心仅相距 23~25 格), 于是挤成一团。
+  // 这里先取较多的候选, 再用贪心挑"彼此尽量远"的点。
+  const spreadPick = (cands, want, minSep) => {
+    const picked = [];
+    for (const c of cands) {
+      if (picked.length >= want) break;
+      let ok = true;
+      for (const p of picked) {
+        if (Math.hypot(c[0] - p[0], c[1] - p[1]) < minSep) { ok = false; break; }
+      }
+      if (ok) picked.push(c);
+    }
+    // 候选不够分散时放宽间距要求补齐
+    for (const c of cands) {
+      if (picked.length >= want) break;
+      if (!picked.includes(c)) picked.push(c);
+    }
+    return picked;
+  };
+
+  const aCands = ringCells(a, 4, 16, 24);
+  const bCands = ringCells(b, 4, 16, 24);
+  const aPosts = spreadPick(aCands, 5, 9).map(c => [c, a]);
+  const bPosts = spreadPick(bCands, 5, 9).map(c => [c, b]);
+
+  // 交错排列 A/B, 让相邻的 CT 不会都被派到同一个包点
+  const posts = [];
+  const maxLen = Math.max(aPosts.length, bPosts.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < aPosts.length) posts.push(aPosts[i]);
+    if (i < bPosts.length) posts.push(bPosts[i]);
+  }
+  DEF_POSTS = posts.length ? posts : [[a, a], [b, b]];
+
+  // 全图开放格扫描一次 (nav 数据不变时不必重复)
+  const open = [];
+  const sites = [a, b];
+  const nearSite = [];
+  for (let cy = 0; cy < A.H; cy++) {
+    for (let cx = 0; cx < A.W; cx++) {
+      if (!A.layerCount(cx, cy)) continue;
+      open.push([cx, cy]);
+      let md = Infinity;
+      for (const s of sites) md = Math.min(md, Math.hypot(cx - s[0], cy - s[1]));
+      if (md < 14) nearSite.push([cx, cy]);
+    }
+  }
+  ROAM_CELLS = open;
+  T_ROAM_CELLS = nearSite.length ? nearSite : open;
+}
+
 export function initGame() {
   cancelTimers(true);
   resetClock();
   computePosts();
-  registerHook('damagePlayer', damagePlayer);
   registerHook('onPlayerDeath', onPlayerDeath);
   registerHook('roundEnd', roundEnd);
   registerHook('plantC4', plantC4);
