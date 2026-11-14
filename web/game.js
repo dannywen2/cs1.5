@@ -11,6 +11,7 @@ const DEG = Math.PI / 180;
 const GEAR = { armor: 650, kevlarhelm: 1000, kit: 200 };
 const NADE_LIMIT = { he: 1, flash: 2, smoke: 1 };
 const BUY_WINDOW = 15;
+const FREEZE_TIME = 4;        // 回合开始冻结时间 (秒)
 const MONEY_CAP = 16000;      // CS 1.5 资金上限
 const BUY_RADIUS = 400;
 
@@ -38,7 +39,7 @@ export const BUY_CATEGORIES = [
     key: 'heavy', label: '机枪', ids: ['m249'],
   },
   {
-    key: 'gear', label: '装备', ids: ['armor', 'kevlarhelm', 'kit', 'he', 'flash', 'ammo'],
+    key: 'gear', label: '装备', ids: ['armor', 'kevlarhelm', 'kit', 'he', 'flash', 'smoke', 'ammo'],
   },
 ];
 const RELOAD_TIME = 1.6;
@@ -49,11 +50,10 @@ const SMOKE_TIME = 12;        // 持续约 12 秒
 const ALLY_COUNT = 4;
 
 let DEF_POSTS = [];
-let ROAM_CELLS = [];
-let T_ROAM_CELLS = [];
-let spawnCounter = 0;
 let roundToken = 0;
+let pendingRoundSettings = null;
 const timers = [];
+const corpses = [];           // 阵亡 bot 模型: 留到回合结束统一释放
 const bombMeshes = { entity: null, led: null, drop: null };
 
 // ---------------------------------------------------------------------------
@@ -101,10 +101,12 @@ function syncScene() {
   for (const bot of S.enemies.concat(S.allies)) {
     if (bot && bot.visual) attach(bot.visual.group);
   }
+  for (const g of corpses) attach(g);
   for (const k of ['entity', 'led', 'drop']) attach(bombMeshes[k]);
   for (const o of S.grenades) attach(o && o.mesh);
   for (const o of S.debris) attach(o && o.mesh);
   for (const o of S.smokes) attach(o && o.mesh);
+  for (const o of S.drops) attach(o && o.mesh);
 }
 
 function dropMesh(mesh) {
@@ -249,7 +251,6 @@ function createVisual(team, weaponId = null) {
 // 包点的 T)。这里只在"已经重叠"时才推, 推力随重叠加深而增大, 且仍然走
 // moveAxis 的可通行判定, 不会把 bot 推进墙里。
 const SEPARATION_DIST = 36;
-const SEPARATION_MAX_PUSH = 60;
 let sepPush = null;              // separateBots 的推量缓冲 (复用, 避免每帧分配)
 
 function separateBots(bots, dt) {
@@ -330,9 +331,14 @@ class Bot {
     this.team = team;
     this.name = (team === 'ct' ? 'CT' : 'T') + S.serial;
     this.pos = copy3(safeArr(pos));
-    this.health = 100 + (roundNum - 1) * 12;
+    // 难度同时影响血量与速度, 保证设置对每回合新生成的 bot 生效
+    const diff = clamp(Number.isFinite(S.settings && S.settings.difficulty)
+      ? S.settings.difficulty : 1, 0.6, 1.5);
+    this.health = Math.round((100 + (roundNum - 1) * 12) * diff);
     this.maxHealth = this.health;
-    this.speed = Math.min(190 + roundNum * 8, 240);
+    this.speed = Math.min(190 + roundNum * 8, 240) * diff;
+    this.stats = { kills: 0, deaths: 0 };
+    this.dead = false;
     this.fireTimer = rand(0.8, 2.0);
     this.strafeDir = Math.random() < 0.5 ? -1 : 1;
     this.strafeTimer = 0;
@@ -514,7 +520,7 @@ class Bot {
       // 目标格每次都不同, 流场缓存永远不命中 (实测每次新目标要重建流场
       // 12~17 ms, 8 个 bot 轮流重算就表现为周期性掉帧)。
       // 现在在自己周围 12~40 格内取点: 路径短、目标重复率高、寻路接近免费。
-      goal = pickNearbyGoal(this.pos, 12, 40) || (ROAM_CELLS.length ? choice(ROAM_CELLS) : A.cellOf(this.pos));
+      goal = pickNearbyGoal(this.pos, 12, 40) || A.cellOf(this.pos);
     }
     if (!A.layers(goal[0], goal[1]).length) goal = A.nearestOpen(goal);
     this.goal = goal;
@@ -876,7 +882,7 @@ class Bot {
     const dmg = headshot ? Math.round(raw * 2.5) : raw;
     const zone = headshot ? 'head' : 'chest';
     if (!ent) {
-      damagePlayer(dmg, wstat.armor_ratio ?? 0.5, zone);
+      damagePlayer(dmg, wstat.armor_ratio ?? 0.5, zone, this.pos);
     } else if (ent.team !== this.team && ent.enabled && ent.health > 0
       && typeof ent.takeDamage === 'function') {
       ent.takeDamage(dmg, headshot, this.pos, this.name, zone);
@@ -904,17 +910,24 @@ class Bot {
   die(headshot = false, killer = '你') {
     if (!this.enabled) return;
     this.enabled = false;
-    dropMesh(this.visual.group);
+    this.dead = true;
+    if (this.visual && typeof this.visual.playDeath === 'function') this.visual.playDeath();
+    if (this.visual && this.visual.group) corpses.push(this.visual.group);
+    if (this.stats) this.stats.deaths += 1;
     play(headshot ? 'head' : 'kill');
+    if (killer === '你') S.score += 1;
     notifyKill(killer, this.name, headshot);
     if (killer === '你') {
-      S.score += 1;
       const wp = A.WEAPONS[S.weapon];
       S.money = Math.min(MONEY_CAP, S.money + (wp ? (wp.kill_reward || 0) : 0));
-    } else if (typeof killer === 'string' && killer.startsWith('CT')) {
+    } else if (typeof killer === 'string'
+      && killer.startsWith((S.playerTeam || 'ct').toUpperCase())) {
       S.allyKills += 1;
     }
     spawnDebris(this.pos, 6);
+    if (this.weaponId && this.weaponId !== 'knife' && A.WEAPONS[this.weaponId]) {
+      spawnWeaponDrop(this.pos, this.weaponId);
+    }
     if (this.team === 't' && this.carrier && S.BOMB.state === 'live') dropC4(this.pos);
     if (S.BOMB.carrier === this) S.BOMB.carrier = null;
     delete S.radarSpotted[this.name];
@@ -933,7 +946,7 @@ class Bot {
 
   c4Behavior(dt) {
     const B = S.BOMB;
-    if (this.team !== 't' || B.state !== 'live') return false;
+    if (this.team !== 't' || B.state !== 'live' || B.carrier === 'player') return false;
     if (!this.carrier && B.drop && dist3(this.pos, B.drop.pos) < 48) {
       clearBombMesh('drop');
       B.drop = null;
@@ -968,7 +981,7 @@ class Bot {
       if (this.visual.flash) this.visual.flash.visible = false;
       this.muzzleUntil = 0;
     }
-    if (S.buyMenuOpen || S.BOMB.state === 'over') { this.syncVisual(); return; }
+    if (!S.round || S.round.phase !== 'live' || S.BOMB.state === 'over') { this.syncVisual(); return; }
     if (this.stunTimer > 0) {
       this.stunTimer -= dt;
       this.syncVisual();
@@ -1159,11 +1172,20 @@ function callUI(name, ...args) {
   }
 }
 
-function notifyKill(killer, victim, headshot) {
-  addKill(killer, victim, headshot);               // state.js -> S.hooks.addKill -> hud
+function notifyKill(killer, victim, headshot, weaponId = null, icon = null) {
+  const wid = weaponId !== null ? weaponId : (killer === '你' ? S.weapon : null);
+  const kindicon = icon !== null ? icon : (headshot ? 'kill_headshot'
+    : (wid === 'knife' ? 'kill_knife' : (wid === 'awp' ? 'kill_awp' : 'kill_default')));
+  if (killer === '你') {
+    S.stats.kills = S.score;              // S.score 已在 Bot.die() 中递增
+  } else if (typeof killer === 'string') {
+    const bot = S.enemies.concat(S.allies).find(b => b && b.name === killer);
+    if (bot && bot.stats) bot.stats.kills += 1;
+  }
+  addKill(killer, victim, headshot, wid, kindicon);   // state.js -> S.hooks.addKill -> hud
   if (typeof prevHooks.killFeed === 'function'
       && prevHooks.killFeed !== prevHooks.addKill) {
-    callUI('killFeed', killer, victim, headshot);
+    callUI('killFeed', killer, victim, headshot, wid, kindicon);
   }
 }
 
@@ -1216,6 +1238,16 @@ export function playerIsAttacker() {
   return (S.playerTeam || 'ct') === 't';
 }
 
+// C4 恒属 T 方: 玩家在 T 时由玩家携带, 否则交给一个 T bot。
+function assignCarrierIfNeeded(bot) {
+  const B = S.BOMB;
+  if (!bot || B.state !== 'live' || B.carrier != null || B.drop
+    || bot.team !== 't' || playerIsAttacker()) return false;
+  B.carrier = bot;
+  bot.setCarrier(true);
+  return true;
+}
+
 export function spawnBot() {
   const team = enemyTeam();
   // T always attacks and spawns at the T spawns; CT defends at its own spawns.
@@ -1223,12 +1255,7 @@ export function spawnBot() {
   const pos = spawnPoint(attacks ? A.tSpawns : A.playerSpawns, S.usedBotSpawns, 0.8);
   const bot = new Bot(pos, S.roundNum, attacks ? 'attack' : 'defend', null, team);
   S.enemies.push(bot);
-  spawnCounter += 1;
-  // Only the attacking side carries the bomb.
-  if (attacks && spawnCounter === 1) {
-    S.BOMB.carrier = bot;
-    bot.setCarrier(true);
-  }
+  assignCarrierIfNeeded(bot);
   S.BOMB.spawnLeft = Math.max(0, S.BOMB.spawnLeft - 1);
   return bot;
 }
@@ -1241,10 +1268,12 @@ export function spawnAlly() {
     : (DEF_POSTS.length ? DEF_POSTS[S.allies.length % DEF_POSTS.length] : null);
   const bot = new Bot(pos, S.roundNum, attacks ? 'attack' : 'defend', post, team);
   S.allies.push(bot);
+  assignCarrierIfNeeded(bot);
   return bot;
 }
 
 export function clearBots() {
+  for (const g of corpses.splice(0)) dropMesh(g);
   for (const bot of S.enemies.concat(S.allies)) {
     if (bot && bot.visual) dropMesh(bot.visual.group);
     if (bot) bot.enabled = false;
@@ -1253,7 +1282,6 @@ export function clearBots() {
   S.allies.length = 0;
   S.usedBotSpawns.clear();
   S.usedAllySpawns.clear();
-  spawnCounter = 0;
   S.BOMB.carrier = null;
 }
 
@@ -1291,6 +1319,79 @@ function updateDebris(dt) {
 function clearListMeshes(list) {
   for (const o of list) dropMesh(o && o.mesh);
   list.length = 0;
+}
+
+function clearCorpses() {
+  for (const g of corpses.splice(0)) dropMesh(g);
+}
+
+function clearDropMeshes() {
+  for (const d of S.drops) dropMesh(d && d.mesh);
+  S.drops.length = 0;
+}
+
+// 掉落武器: 保留拾取时的弹匣/备弹, 网格留在场景里到 ttl 归零。
+function spawnWeaponDrop(pos, wid, clip = null, reserve = null) {
+  const w = A.WEAPONS[wid];
+  if (!w || !w.clip_size) return null;
+  const p = safeArr(pos);
+  const dp = [p[0], p[1] + 8, p[2]];
+  const mesh = makeBox([14, 4, 6], 0x9a8250, dp);
+  const drop = {
+    wid,
+    clip: clip ?? w.clip_size,
+    reserve: reserve ?? Math.floor((w.reserve || 0) / 2),
+    pos: dp,
+    mesh, ttl: 60,
+  };
+  S.drops.push(drop);
+  return drop;
+}
+
+function tickDrops(dt) {
+  for (let i = S.drops.length - 1; i >= 0; i--) {
+    const d = S.drops[i];
+    d.ttl -= dt;
+    if (d.mesh) d.mesh.rotation.y += 1.8 * dt;
+    if (d.ttl <= 0) {
+      dropMesh(d.mesh);
+      S.drops.splice(i, 1);
+    }
+  }
+}
+
+export function pickupWeapon() {
+  if (S.player.dead || S.buyMenuOpen) return false;
+  let best = null, bestI = -1, bestD = 64;
+  for (let i = 0; i < S.drops.length; i++) {
+    const d = S.drops[i];
+    if (!d || !A.WEAPONS[d.wid]) continue;
+    const dd = dist2(S.player.pos, d.pos);
+    if (dd < bestD) { bestD = dd; best = d; bestI = i; }
+  }
+  if (!best) return false;
+  const wid = best.wid;
+  const w = A.WEAPONS[wid];
+  const clip = Number.isFinite(best.clip) ? best.clip : w.clip_size;
+  const reserve = Number.isFinite(best.reserve) ? best.reserve : 0;
+  for (const other of Object.keys(S.owned)) {
+    const ow = A.WEAPONS[other];
+    if (other !== wid && ow && ow.slot === w.slot) { delete S.owned[other]; delete S.ammo[other]; }
+  }
+  S.owned[wid] = true;
+  S.ammo[wid] = [clamp(clip, 0, w.clip_size || clip), Math.max(0, reserve)];
+  S.weapon = wid;
+  S.reloading = false;
+  S.scoped = false;
+  S.scopeLevel = 0;
+  switchWeapon(wid);
+  play('deploy');
+  showCenter(`拾取 ${w.name || wid}`, '#b4d2ff', 1.4);
+  dropMesh(best.mesh);
+  S.drops.splice(bestI, 1);
+  callUI('updateAmmo');
+  updateEquipText();
+  return true;
 }
 
 // 生成一枚手雷 (玩家与 bot 共用)。
@@ -1410,7 +1511,7 @@ function explodeNade(g) {
     }
     if (playerWithinRadius) {
       const pd = dist3(pos, playerEye);
-      damagePlayer(Math.round(100 * (1 - pd / radius)));
+      damagePlayer(Math.round(100 * (1 - pd / radius)), 0.5, 'chest', pos);
     }
     spawnDebris(pos, 10);
   } else {
@@ -1436,7 +1537,7 @@ function explodeNade(g) {
 
 function updateGrenades(dt) {
   if (S.BOMB.state === 'over') return;
-  if (S.buyMenuOpen) return;
+  if (S.round && S.round.phase !== 'live') return;
   for (const g of S.grenades.slice()) {
     g.fuse -= dt;
     g.vel[1] -= A.GRAVITY * dt;
@@ -1497,6 +1598,61 @@ function clearBombEntities() {
   S.BOMB.drop = null;
 }
 
+// 阵亡后补发队伍默认手枪: 半场换边与重开比赛也走同一套装备初始化。
+function resetLoadout(team) {
+  const t = team === 't' ? 't' : 'ct';
+  const wid = t === 't' ? 'glock18' : 'usp';
+  for (const id of Object.keys(S.owned)) delete S.owned[id];
+  for (const id of Object.keys(S.ammo)) delete S.ammo[id];
+  S.owned.knife = true;
+  S.owned[wid] = true;
+  giveAmmo(wid);
+  S.weapon = wid;
+  if (!S.silenced) S.silenced = { usp: false, m4a1: false };
+  S.silenced.usp = false;
+  S.silenced.m4a1 = false;
+  S.glockMode = 'semi';
+  if (!S.recoil) S.recoil = { index: 0, lastAt: -99 };
+  S.recoil.index = 0;
+  S.recoil.lastAt = -99;
+  S.scoped = false;
+  S.scopeLevel = 0;
+  S.reloading = false;
+  S.player.armor = 0;
+  S.player.hasHelmet = false;
+  S.player.hasKit = false;
+  if (!S.player.nades) S.player.nades = { he: 0, flash: 0, smoke: 0 };
+  S.player.nades.he = 0;
+  S.player.nades.flash = 0;
+  S.player.nades.smoke = 0;
+  S.player.hasC4 = false;
+  S.player.needsDefaultPistol = false;
+  callUI('switchWeapon', wid);
+  callUI('updateAmmo');
+  updateEquipText();
+}
+
+function resetMatchFields() {
+  const M = S.match;
+  if (!M) return;
+  if (M.overtime === undefined) M.overtime = false;
+  if (M.otCT === undefined) M.otCT = 0;
+  if (M.otT === undefined) M.otT = 0;
+  if (M.otPlayed === undefined) M.otPlayed = 0;
+}
+
+function roundSpawns() {
+  return playerIsAttacker()
+    ? (Array.isArray(A.tSpawns) && A.tSpawns.length ? A.tSpawns : [[0, 0, 0]])
+    : (Array.isArray(A.playerSpawns) && A.playerSpawns.length ? A.playerSpawns : [[0, 0, 0]]);
+}
+
+function roundYaws() {
+  return playerIsAttacker()
+    ? (Array.isArray(A.tYaws) ? A.tYaws : [])
+    : (Array.isArray(A.playerYaws) ? A.playerYaws : []);
+}
+
 export function plantC4(pos) {
   const B = S.BOMB;
   if (B.state !== 'live') return;
@@ -1518,10 +1674,15 @@ export function plantC4(pos) {
   B.beepAt = 0;
   B.defuse = 0;
   B.allyDefuse = 0;
+  B.carrier = null;
+  S.player.hasC4 = false;
+  S.plant.active = false;
+  S.plant.progress = 0;
+  S.plant.near = false;
   play('c4_plant');
-  showCenter(`C4 已在 ${B.site} 点安放!  按住 E 拆除`, '#ff645a');
+  showCenter(`C4 已在 ${B.site} 点安放!  ${playerIsAttacker() ? '守住它' : '按住 E 拆除'}`, '#ff645a');
+  for (const b of S.enemies.concat(S.allies)) b.setCarrier(false);
   for (const e of S.enemies) {
-    e.setCarrier(false);
     e.state = 'hunt';
     e.repath();
   }
@@ -1544,7 +1705,8 @@ export function dropC4(pos) {
   clearBombMesh('drop');
   bombMeshes.drop = makeBox([12, 5, 9], 0xcd3c2d, dp);
   B.drop = { pos: dp, mesh: bombMeshes.drop };
-  showCenter('C4 掉落了!  阻止 T 拾取', '#ffbe5a');
+  showCenter(playerIsAttacker()
+    ? 'C4 掉落了!  去把它捡回来' : 'C4 掉落了!  阻止 T 拾取', '#ffbe5a');
 }
 
 export function explodeC4() {
@@ -1567,15 +1729,114 @@ export function matchState() {
   return S.match;
 }
 
-// Decide the winner from the whole-match totals.
+function clearRoundEntities() {
+  clearBots();
+  clearCorpses();
+  clearDropMeshes();
+  clearListMeshes(S.grenades);
+  clearListMeshes(S.smokes);
+  clearListMeshes(S.debris);
+  clearBombEntities();
+  if (S.engine && typeof S.engine.clearEffects === 'function') S.engine.clearEffects();
+}
+
+export function restartMatch() {
+  cancelTimers(true);
+  clearRoundEntities();
+  resetMatchFields();
+  const M = S.match;
+  const mr = clamp(Number.isFinite(S.settings && S.settings.roundsPerHalf)
+    ? S.settings.roundsPerHalf : 15, 1, 30);
+  M.roundsPerHalf = mr;
+  M.maxRounds = mr * 2;
+  M.half = 1;
+  M.half1CT = 0;
+  M.half1T = 0;
+  M.ctScoreTotal = 0;
+  M.tScoreTotal = 0;
+  M.over = false;
+  M.winner = null;
+  M.overtime = false;
+  M.otCT = 0;
+  M.otT = 0;
+  M.otPlayed = 0;
+  S.playerTeam = 'ct';
+  S.ctScore = S.tScore = 0;
+  S.roundNum = 0;
+  S.money = 800;
+  S.lossStreak = 0;
+  S.score = 0;
+  S.allyKills = 0;
+  if (!S.stats) S.stats = { kills: 0, deaths: 0 };
+  S.stats.kills = 0;
+  S.stats.deaths = 0;
+  S.matchPanel = null;
+  S.menuMode = null;
+  S.round = { phase: 'freeze', freezeLeft: FREEZE_TIME, buyLeft: BUY_WINDOW };
+  resetLoadout('ct');
+  nextRound();
+}
+
+export function startOvertime() {
+  const M = S.match;
+  if (!M || M.winner !== 'draw') return;
+  resetMatchFields();
+  cancelTimers(true);
+  clearRoundEntities();
+  M.overtime = true;
+  M.otPlayed = 0;
+  M.roundsPerHalf = 3;
+  M.maxRounds = 6;
+  M.half = 1;
+  M.over = false;
+  M.winner = null;
+  M.half1CT = M.ctScoreTotal;
+  M.half1T = M.tScoreTotal;
+  S.ctScore = S.tScore = 0;
+  const newTeam = S.playerTeam === 'ct' ? 't' : 'ct';
+  S.playerTeam = newTeam;
+  resetLoadout(newTeam);
+  S.matchPanel = null;
+  S.round = { phase: 'freeze', freezeLeft: FREEZE_TIME, buyLeft: BUY_WINDOW };
+  showCenter('加时赛 MR3 开始', '#ffd678');
+  nextRound();
+}
+
+export function applySettings() {
+  resetMatchFields();
+  const M = S.match;
+  const mr = clamp(Number.isFinite(S.settings && S.settings.roundsPerHalf)
+    ? S.settings.roundsPerHalf : 15, 1, 30);
+  // 比赛进行中不改写已开局的 MR, 等下一场从设置生效。
+  if (!S.started || M.over || S.roundNum === 0) {
+    if (!M.overtime) {
+      M.roundsPerHalf = mr;
+      M.maxRounds = mr * 2;
+    }
+    pendingRoundSettings = null;
+  } else if (!M.overtime && (M.roundsPerHalf !== mr || M.maxRounds !== mr * 2)) {
+    pendingRoundSettings = { roundsPerHalf: mr, maxRounds: mr * 2 };
+  }
+  S.botsPerRound = clamp(Math.round((S.settings && S.settings.botCount) || 5)
+    + Math.max(0, S.roundNum - 1), 1, 8);
+}
+
+// 常规赛 15:15 返回 'draw' 由终局面板决定是否加时; 加时打满 6 回合再按总分判胜。
 function decideMatchWinner() {
   const M = S.match;
+  resetMatchFields();
+  if (M.overtime) {
+    if (M.otPlayed >= M.maxRounds) {
+      if (M.ctScoreTotal > M.tScoreTotal) return 'ct';
+      if (M.tScoreTotal > M.ctScoreTotal) return 't';
+    }
+    return null;
+  }
   const need = M.roundsPerHalf + 1;          // MR15 -> 16 rounds to win
   if (M.ctScoreTotal >= need) return 'ct';
   if (M.tScoreTotal >= need) return 't';
-  const played = M.ctScoreTotal + M.tScoreTotal;
-  if (played >= M.maxRounds) {
-    // Regulation exhausted: higher score wins, equal score is a draw.
+  if (M.ctScoreTotal + M.tScoreTotal >= M.maxRounds) {
+    // 常规赛打满: 高分获胜; 15:15 交给加时, 不再作为死局。
     if (M.ctScoreTotal > M.tScoreTotal) return 'ct';
     if (M.tScoreTotal > M.ctScoreTotal) return 't';
     return 'draw';
@@ -1587,35 +1848,65 @@ function decideMatchWinner() {
 function updateMatchScore() {
   const M = S.match;
   if (M.over) return false;
+  resetMatchFields();
+  if (M.overtime) M.otPlayed += 1;
 
-  // Recompute whole-match totals from the per-half counters.
-  if (M.half === 1) {
-    M.ctScoreTotal = S.ctScore;
-    M.tScoreTotal = S.tScore;
-  } else {
-    M.ctScoreTotal = M.half1CT + S.ctScore;
-    M.tScoreTotal = M.half1T + S.tScore;
-  }
+  // 通用半场累计: 换边前把本半场比分累加进 half1*, 总分始终是全赛累计。
+  M.ctScoreTotal = M.half1CT + S.ctScore;
+  M.tScoreTotal = M.half1T + S.tScore;
 
-  // Half-time swap FIRST: if this round completed the first half, the totals
-  // above are the final first-half numbers, and the match-winner check below
-  // must not run against them (a team on 15 cannot have "won" yet even if the
-  // total momentarily reads 16 after the swap).
-  const played = M.ctScoreTotal + M.tScoreTotal;
-  if (M.half === 1 && played >= M.roundsPerHalf) {
-    M.half = 2;
-    M.half1CT = M.ctScoreTotal;
-    M.half1T = M.tScoreTotal;
-    S.ctScore = 0;
-    S.tScore = 0;
-    S.playerTeam = S.playerTeam === 'ct' ? 't' : 'ct';
+  const swapHalf = () => {
+    const newTeam = S.playerTeam === 'ct' ? 't' : 'ct';
+    S.playerTeam = newTeam;
     S.lossStreak = 0;
     S.money = 800;                 // 半场重置经济 (pistol round)
+    resetLoadout(newTeam);
+    clearListMeshes(S.grenades);
+    clearListMeshes(S.smokes);
+    clearListMeshes(S.debris);
+    clearDropMeshes();
+    clearCorpses();
+    clearBots();
+    S.BOMB.wasPlanted = false;
+    S.player.hasC4 = false;
     showCenter('------ 半场结束, 交换攻防 ------', '#ffd678');
+  };
+
+  // 加时赛打满 6 回合先按总分判胜/续加时, 再处理每 3 回合换边。
+  const winner = decideMatchWinner();
+  if (M.overtime && M.otPlayed >= M.maxRounds) {
+    if (winner) {
+      M.over = true;
+      M.winner = winner;
+      return true;
+    }
+    M.otPlayed = 0;
+    M.half1CT += S.ctScore;
+    M.half1T += S.tScore;
+    M.ctScoreTotal = M.half1CT;
+    M.tScoreTotal = M.half1T;
+    S.ctScore = 0;
+    S.tScore = 0;
+    M.half = M.half === 1 ? 2 : 1;
+    swapHalf();
     return false;
   }
 
-  const winner = decideMatchWinner();
+  // 常规赛按 MR 换边; 加时 MR3 每 3 回合换边, 都先于胜负判定。
+  if ((!M.overtime && M.half === 1
+        && M.ctScoreTotal + M.tScoreTotal >= M.roundsPerHalf)
+      || (M.overtime && M.otPlayed % 3 === 0)) {
+    M.half1CT += S.ctScore;
+    M.half1T += S.tScore;
+    M.ctScoreTotal = M.half1CT;
+    M.tScoreTotal = M.half1T;
+    S.ctScore = 0;
+    S.tScore = 0;
+    M.half = M.half === 1 ? 2 : 1;
+    swapHalf();
+    return false;
+  }
+
   if (winner) {
     M.over = true;
     M.winner = winner;
@@ -1627,44 +1918,59 @@ function updateMatchScore() {
 export function roundEnd(winner, reason) {
   const B = S.BOMB;
   if (B.state === 'over') return;
+  const M = S.match;
+  if (pendingRoundSettings && M) {
+    M.roundsPerHalf = pendingRoundSettings.roundsPerHalf;
+    M.maxRounds = pendingRoundSettings.maxRounds;
+    pendingRoundSettings = null;
+  }
   B.state = 'over';
+  if (S.round) S.round.phase = 'over';
+  S.shootingEnabled = false;
+  S.plant.active = false;
+  S.plant.progress = 0;
+  S.plant.near = false;
+  const playerWon = winner === (S.playerTeam || 'ct');
+  const side = (winner || '').toUpperCase();
   let msg, color, reward;
   if (winner === 'ct') {
     S.ctScore += 1;
-    S.lossStreak = 0;
     if (reason === 'defused') {
-      play('c4_defuse');
-      msg = 'C4 已拆除 - CT 胜利!';
+      play('c4_disarmed');
+      msg = playerWon ? 'C4 已拆除' : 'C4 被拆除';
     } else if (reason === 'timeout') {
       play('win');
-      msg = '时间耗尽 - CT 守住包点!';
+      msg = playerWon ? '时间耗尽, 守住包点' : '时间耗尽, 进攻失败';
     } else {
       play('win');
-      msg = 'T 全灭 - CT 胜利!';
+      msg = '进攻方全灭';
     }
-    color = '#78ff78';
-    reward = WIN_BONUS;
   } else {
     S.tScore += 1;
     play('lose');
+    if (reason === 'exploded') msg = playerWon ? 'C4 爆炸' : 'C4 爆炸, 防守失败';
+    else if (reason === 'killed') msg = '你阵亡了';
+    else msg = playerWon ? '进攻方拿下包点' : '防守方失守';
+  }
+  if (playerWon) {
+    S.lossStreak = 0;
+    reward = WIN_BONUS;
+    color = '#78ff78';
+    msg += ` - 本方获胜 (${side})`;
+  } else {
     S.player.armor = 0;
     S.player.hasHelmet = false;
     if (reason === 'killed') S.player.hasKit = false;
     updateEquipText();
-    // 连败奖励: 输一次 +1 档, 上限 3400
     const idx = Math.min(S.lossStreak, LOSS_BONUS.length - 1);
     reward = LOSS_BONUS[idx];
     S.lossStreak = Math.min(S.lossStreak + 1, LOSS_BONUS.length);
     color = '#ff6464';
-    if (reason === 'exploded') msg = `C4 爆炸 - 回合失败`;
-    else {
-      S.whiteFlash = 0;
-      msg = `你阵亡了 - 回合失败`;
+    msg += ` - 对方获胜 (${side})`;
+    if (S.playerTeam === 't' && B.wasPlanted) {
+      reward += BOMB_PLANT_BONUS;
+      msg += ` (下包奖励 +$${BOMB_PLANT_BONUS})`;
     }
-    // T 已安放 C4 的额外奖励
-    // 注意: +$800 是 CS 1.5 给 T 方的下包奖励, 而玩家是 CT。
-    // 旧代码把它加进了 S.money (玩家钱包), 等于 CT 挨炸反而多拿钱。
-    // 这里只保留提示文案, 不加钱。
   }
   S.money = Math.min(MONEY_CAP, S.money + reward);
   msg += `  +$${reward}`;
@@ -1674,15 +1980,18 @@ export function roundEnd(winner, reason) {
   callUI('showSpectate', '');
   const matchOver = updateMatchScore();
   if (matchOver) {
-    const M = S.match;
-    if (M.winner === 'draw') {
-      showCenter(`比赛结束 - 平局 ${M.ctScoreTotal}:${M.tScoreTotal}`, '#ffd678');
-    } else {
-      const won = (M.winner === S.playerTeam);
-      showCenter(`比赛结束 - ${M.winner.toUpperCase()} 获胜 ${M.ctScoreTotal}:${M.tScoreTotal}` +
-                 (won ? '  (你赢了!)' : '  (你输了)'), won ? '#78ff78' : '#ff6464');
-      play(won ? 'win' : 'lose');
-    }
+    const title = M.winner === 'draw'
+      ? `比赛结束 - 平局 ${M.ctScoreTotal}:${M.tScoreTotal}`
+      : `比赛结束 - ${M.winner.toUpperCase()} 获胜 ${M.ctScoreTotal}:${M.tScoreTotal}`;
+    const won = M.winner === S.playerTeam;
+    const panel = {
+      title, score: `${M.ctScoreTotal}:${M.tScoreTotal}`,
+      canOvertime: M.winner === 'draw', winner: M.winner,
+    };
+    S.matchPanel = panel;
+    showCenter(title, M.winner === 'draw' ? '#ffd678' : (won ? '#78ff78' : '#ff6464'));
+    if (M.winner !== 'draw') play(won ? 'win' : 'lose');
+    callUI('showMatchOver', panel);
     return;
   }
   later(nextRound, 4);
@@ -1690,16 +1999,27 @@ export function roundEnd(winner, reason) {
 
 function tickRound(dt) {
   const B = S.BOMB;
-  if (B.state === 'over') return;
-  if (B.state === 'live') {
-    // 购买菜单只允许在购买窗口内打开。窗口一过就强制关闭 —— 否则玩家
-    // 可以开局按 B 后一直不关, 8 个 bot 全部冻结 (Bot.update 早退) 而回合
-    // 计时照走, 105 秒后 timeout, CT 白拿 +$3250。
-    // 注意不能用「暂停计时」的方式, 那只是换一种拖延。
-    if (S.buyMenuOpen && A.ROUND_TIME - B.roundLeft > BUY_WINDOW) {
-      S.buyMenuOpen = false;
-      callUI('toggleBuy', false);
+  const R = S.round || (S.round = { phase: 'freeze', freezeLeft: FREEZE_TIME, buyLeft: BUY_WINDOW });
+  if (B.state === 'over' || R.phase === 'over') return;
+
+  // 冻结时间只递减冻结计时: 购买窗口、回合与 C4 计时都不推进。
+  if (R.phase === 'freeze') {
+    R.freezeLeft = Math.max(0, R.freezeLeft - dt);
+    B.timerText = fmtTime(B.roundLeft);
+    if (R.freezeLeft <= 0) {
+      R.phase = 'live';
+      R.buyLeft = BUY_WINDOW;
+      play('round_start');
+      showCenter('回合开始', '#ffffff', 1.6);
     }
+    return;
+  }
+  R.buyLeft = Math.max(0, R.buyLeft - dt);
+  if (S.buyMenuOpen && R.buyLeft <= 0) {
+    S.buyMenuOpen = false;
+    callUI('toggleBuy', false);
+  }
+  if (B.state === 'live') {
     B.roundLeft -= dt;
     const left = Math.max(0, B.roundLeft);
     B.timerText = fmtTime(left);
@@ -1727,15 +2047,17 @@ function tickRound(dt) {
   const flat = dist2(p, B.pos);
   const near = flat < A.DEFUSE_RANGE && Math.abs(p[1] - B.pos[1]) < 48;
   const need = S.player.hasKit ? A.KIT_DEFUSE_TIME : A.DEFUSE_TIME;
-  if (near && S.defuseHeld && !S.buyMenuOpen && !S.player.dead) {
+  if (near && S.defuseHeld && !S.buyMenuOpen && !S.player.dead
+      && !playerIsAttacker()) {
     B.defuse += dt;
     if (B.defuse >= need) { roundEnd('ct', 'defused'); return; }
   } else {
     B.defuse = Math.max(0, B.defuse - dt * 1.5);
   }
 
-  const helper = S.allies.find(a => a.enabled && a.health > 0 && dist3(a.pos, B.pos) < A.DEFUSE_RANGE);
-  if (helper && (S.player.dead || flat > A.DEFUSE_RANGE)) {
+  const helper = S.allies.concat(S.enemies).find(a => a && a.enabled
+    && a.health > 0 && a.team === 'ct' && dist3(a.pos, B.pos) < A.DEFUSE_RANGE);
+  if (helper && (S.player.dead || flat > A.DEFUSE_RANGE || playerIsAttacker())) {
     B.allyDefuse += dt;
     if (S.player.dead) callUI('showSpectate', `${helper.name} 正在拆除 C4  ${Math.max(0, 8 - B.allyDefuse).toFixed(0)}s`);
     if (B.allyDefuse >= 8) { roundEnd('ct', 'defused'); return; }
@@ -1748,6 +2070,8 @@ function tickRound(dt) {
 export function nextRound() {
   cancelTimers(true);
   clearBots();
+  clearCorpses();
+  clearDropMeshes();
   // 回合换了目标包点/洞口状态会变, 上回合的流场与路径缓存全部作废
   if (typeof A.clearPathCache === 'function') A.clearPathCache();
   // 立刻重建包点流场 (~26 ms)。调用点包括 initGame (加载界面后)、回合结算
@@ -1757,9 +2081,15 @@ export function nextRound() {
   clearListMeshes(S.smokes);
   clearListMeshes(S.debris);
   clearBombEntities();
+  if (S.engine && typeof S.engine.clearEffects === 'function') S.engine.clearEffects();
 
   S.roundNum += 1;
-  S.botsPerRound = Math.min(5 + S.roundNum - 1, 8);
+  S.botsPerRound = clamp(Math.round((S.settings && S.settings.botCount) || 5)
+    + S.roundNum - 1, 1, 8);
+  S.round = { phase: 'freeze', freezeLeft: FREEZE_TIME, buyLeft: BUY_WINDOW };
+  S.plant.active = false;
+  S.plant.progress = 0;
+  S.plant.near = false;
   S.allyCount = ALLY_COUNT;
   for (const k of Object.keys(S.radarSpotted)) delete S.radarSpotted[k];
   S.botKnownPos = null;
@@ -1778,6 +2108,7 @@ export function nextRound() {
   B.allyDefuse = 0;
   B.beepAt = 0;
   B.wasPlanted = false;
+  S.player.hasC4 = false;
   B.spawnLeft = S.botsPerRound;
   B.site = choice(['A', 'B']);
   B.targetPos = copy3(safeArr(A.BOMB_SITES[B.site]));
@@ -1796,9 +2127,13 @@ export function nextRound() {
   p.crouching = false;
   // 灵敏度是倍率, 每回合恢复到用户设定值 (不能写死, 否则用户改了会被重置)
   p.sensitivity = Number.isFinite(p.sensitivityBase) ? p.sensitivityBase : 2.0;
-  // 护甲/投掷物/拆弹钳存活时跨回合保留
+  // 护甲/投掷物/拆弹钳存活时跨回合保留; 阵亡后补发本方默认手枪
+  if (p.needsDefaultPistol) resetLoadout(S.playerTeam);
+  else callUI('switchWeapon', S.weapon);
   S.shootingEnabled = true;
   S.reloading = false;
+  S.scoped = false;
+  S.scopeLevel = 0;
   S.fov = A.BASE_FOV;
   S.whiteFlash = 0;
   S.redFlash = 0;
@@ -1806,19 +2141,32 @@ export function nextRound() {
   callUI('toggleBuy', false);
   callUI('showSpectate', '');
 
-  const spawns = Array.isArray(A.playerSpawns) && A.playerSpawns.length ? A.playerSpawns : [[0, 0, 0]];
+  const spawns = roundSpawns();
+  const yaws = roundYaws();
   const si = randInt(0, spawns.length - 1);
   const sp = spawns[si];
   p.pos = [sp[0], (sp[1] || 0) + 2, sp[2]];
   // GoldSrc 出生 yaw 是绕竖直轴的角度; Ursina/state 约定 rotation_y = 90 - yaw。
   // state.js yaw 同为度且 forward=(sin,cos), 因此直接沿用该换算式。
-  p.yaw = 90 - ((A.playerYaws && A.playerYaws[si]) || 0);
+  p.yaw = 90 - ((yaws && yaws[si]) || 0);
 
   updateEquipText();
   callUI('updateAmmo');
-  showCenter(`回合 ${S.roundNum}  |  CT 5 v ${S.botsPerRound} T  |  防守 ${B.site} 点`, '#ffffff');
-  for (let i = 0; i < ALLY_COUNT; i++) later(() => spawnAlly(), i * 0.4);
-  for (let i = 0; i < S.botsPerRound; i++) later(() => spawnBot(), 0.5 + i * 0.8);
+  // 冻结时间内同步生成所有 bot, 不再靠 later() 分批拖延。
+  for (let i = 0; i < ALLY_COUNT; i++) spawnAlly();
+  for (let i = 0; i < S.botsPerRound; i++) spawnBot();
+  if (playerIsAttacker()) {
+    B.carrier = 'player';
+    p.hasC4 = true;
+    for (const b of S.enemies.concat(S.allies)) b.setCarrier(false);
+  } else if (B.carrier == null) {
+    const bot = S.enemies.concat(S.allies).find(b => b && b.team === 't');
+    if (bot) assignCarrierIfNeeded(bot);
+  } else {
+    p.hasC4 = false;
+  }
+  const role = playerIsAttacker() ? `T 进攻 ${B.site} 点 | 你携带 C4` : `CT 防守 ${B.site} 点`;
+  showCenter(`回合 ${S.roundNum} | ${role}`, '#ffffff');
 }
 
 // ---------------------------------------------------------------------------
@@ -1832,8 +2180,14 @@ export function nextRound() {
 //
 // zone: 'head' 时只有戴头盔才吃护甲减免 —— 这是 CS 里"头盔"的唯一作用,
 // 没有头盔时头部完全裸奔 (爆头伤害全额)。旧实现把头盔做成了纯装饰。
-export function damagePlayer(dmg, armorRatio = 0.5, zone = 'chest') {
+export function damagePlayer(dmg, armorRatio = 0.5, zone = 'chest', fromPos = null) {
   if (S.player.dead || S.BOMB.state === 'over' || !Number.isFinite(dmg) || dmg <= 0) return;
+  if (fromPos) {
+    const dx = fromPos[0] - S.player.pos[0], dz = fromPos[2] - S.player.pos[2];
+    let angle = Math.atan2(dx, dz) * 180 / Math.PI - (S.player.yaw || 0);
+    angle = ((angle + 180) % 360 + 360) % 360 - 180;
+    S.damageDir = { angle, until: S.time + 1 };
+  }
   let amount = dmg;
   const ratio = clamp(Number.isFinite(armorRatio) ? armorRatio : 0.5, 0, 1);
   // 头盔判定: 打头时没头盔 = 护甲无效
@@ -1865,10 +2219,21 @@ export function onPlayerDeath() {
   p.hasKit = false;
   p.scoped = false;
   p.pitch = 0;
+  p.needsDefaultPistol = true;
+  S.stats.deaths = (S.stats.deaths || 0) + 1;
   S.shootingEnabled = false;
   S.defuseHeld = false;
   S.reloading = false;
-  // 死亡丢枪: 清空所有主武器/手枪 (CS 1.5 行为), 只留匕首。
+  // 死亡丢枪: 掉落死亡前拥有的主武器 (slot===1)。
+  const dropWid = Object.keys(S.owned).find(id => {
+    const w = A.WEAPONS[id];
+    return w && w.slot === 1 && w.clip_size != null;
+  });
+  if (dropWid) {
+    const ammo = S.ammo[dropWid];
+    spawnWeaponDrop(p.pos, dropWid, ammo ? ammo[0] : null, ammo ? ammo[1] : null);
+  }
+  // 清空所有主武器/手枪 (CS 1.5 行为), 只留匕首。
   // 旧实现只删 ak47/awp —— ak47 是 T 专用、玩家永远买不到, 是死代码,
   // 而 m4a1/aug/scout/mp5 等全都免费跨回合保留。
   for (const wid of Object.keys(S.owned)) {
@@ -1886,12 +2251,24 @@ export function onPlayerDeath() {
   updateEquipText();
   showCenter('你已阵亡  ·  观战队友', '#ffa078');
   callUI('showSpectate', '你已阵亡  ·  观战队友');
+  if (p.hasC4) {
+    dropC4(p.pos);
+    p.hasC4 = false;
+    S.BOMB.carrier = null;
+  }
   if (S.allies.length === 0) roundEnd('t', 'killed');
 }
 
 function canBuy() {
-  if (S.BOMB.state !== 'live' || A.ROUND_TIME - S.BOMB.roundLeft > BUY_WINDOW) return false;
-  const spawns = Array.isArray(A.playerSpawns) ? A.playerSpawns : [];
+  if (S.BOMB.state !== 'live') return false;
+  const R = S.round;
+  // 测试直接把玩家设为存活/购买态时, 同步允许购买窗口兜底。
+  const elapsed = A.ROUND_TIME - S.BOMB.roundLeft;
+  const windowOpen = R && R.phase !== 'over'
+    ? (R.buyLeft > 0 || elapsed <= BUY_WINDOW)
+    : elapsed <= BUY_WINDOW;
+  if (!windowOpen) return false;
+  const spawns = roundSpawns();
   if (!spawns.length) return true;   // 资产缺失时不锁死购买
   return spawns.some(sp => dist3(S.player.pos, sp) < BUY_RADIUS);
 }
@@ -1910,6 +2287,7 @@ function priceOf(id) {
 // 队伍限制: CS 1.5 里 AK/SG552/G3SG1/glock/elite/deagle 是 T 专用,
 // M4A1/AUG/SG550/USP/fiveseven 是 CT 专用, 其余双方都能买。
 export function canBuyItem(id) {
+  if (id === 'kit' && S.playerTeam === 't') return false;
   const w = A.WEAPONS[id];
   if (!w) return true;                       // 装备类无队别限制
   if (!w.team) return true;                  // 双方通用武器
@@ -2035,6 +2413,52 @@ export function switchWeapon(wid) {
 
 export function updateEquipText() { callUI('updateEquip'); }
 
+function tickPlayerC4(dt) {
+  const B = S.BOMB;
+  const p = S.player;
+  if (!playerIsAttacker() || B.state !== 'live' || !S.round
+      || S.round.phase !== 'live' || p.dead || S.buyMenuOpen) {
+    S.plant.active = false;
+    S.plant.near = false;
+    S.plant.progress = 0;
+    // 回合结算期间不要覆盖 roundEnd 写入的射击禁用。
+    if (!p.dead && B.state !== 'over' && (!S.round || S.round.phase !== 'over')) {
+      S.shootingEnabled = true;
+    }
+    return;
+  }
+  if (B.drop && dist2(p.pos, B.drop.pos) < 56) {
+    clearBombMesh('drop');
+    B.drop = null;
+    B.carrier = 'player';
+    p.hasC4 = true;
+    play('c4_plant');
+    showCenter('你拾起了 C4', '#b4d2ff', 1.6);
+  }
+  const target = B.targetPos;
+  const near = !!(p.hasC4 && target
+    && dist2(p.pos, target) < A.PLANT_RADIUS && Math.abs(p.pos[1] - target[1]) < 48);
+  S.plant.near = near;
+  S.plant.progress = clamp(B.plant / A.PLANT_TIME, 0, 1);
+  if (near && S.defuseHeld) {
+    S.plant.active = true;
+    B.plant += dt;
+    if (B.plant >= A.PLANT_TIME) {
+      plantC4(p.pos);
+      S.plant.active = false;
+      S.plant.progress = 0;
+      S.plant.near = false;
+      if (!p.dead) S.shootingEnabled = true;
+      return;
+    }
+  } else {
+    S.plant.active = false;
+    B.plant = Math.max(0, B.plant - dt * 2);
+  }
+  S.plant.progress = clamp(B.plant / A.PLANT_TIME, 0, 1);
+  if (!p.dead) S.shootingEnabled = !S.plant.active;
+}
+
 // ---------------------------------------------------------------------------
 // 初始化 / 每帧
 // ---------------------------------------------------------------------------
@@ -2077,22 +2501,6 @@ function computePosts() {
     if (i < bPosts.length) posts.push(bPosts[i]);
   }
   DEF_POSTS = posts.length ? posts : [[a, a], [b, b]];
-
-  // 全图开放格扫描一次 (nav 数据不变时不必重复)
-  const open = [];
-  const sites = [a, b];
-  const nearSite = [];
-  for (let cy = 0; cy < A.H; cy++) {
-    for (let cx = 0; cx < A.W; cx++) {
-      if (!A.layerCount(cx, cy)) continue;
-      open.push([cx, cy]);
-      let md = Infinity;
-      for (const s of sites) md = Math.min(md, Math.hypot(cx - s[0], cy - s[1]));
-      if (md < 14) nearSite.push([cx, cy]);
-    }
-  }
-  ROAM_CELLS = open;
-  T_ROAM_CELLS = nearSite.length ? nearSite : open;
 }
 
 export function initGame() {
@@ -2105,11 +2513,10 @@ export function initGame() {
   registerHook('dropC4', dropC4);
   registerHook('explodeC4', explodeC4);
   registerHook('switchWeapon', switchWeapon);
-  registerHook('notifyGunfire', () => {
-    const wp = A.WEAPONS[S.weapon] || {};
-    const silenced = /_sil$/.test(wp.sfx || '');
-    notifyGunfire(S.player.pos, S.playerTeam || 'ct', silenced ? 0.35 : 1);
-  });
+  registerHook('pickupWeapon', pickupWeapon);
+  registerHook('restartMatch', restartMatch);
+  registerHook('startOvertime', startOvertime);
+  registerHook('applySettings', applySettings);
   registerHook('reload', reloadWeapon);
   registerHook('buy', buyItem);
   registerHook('throwNade', throwNade);
@@ -2133,7 +2540,9 @@ export function initGame() {
   registerHook('addKill', relay('addKill'));
   registerHook('radio', relay('radio'));
   registerHook('showSpectate', relay('showSpectate'));
-  giveAmmo('usp');
+  registerHook('showMatchOver', relay('showMatchOver'));
+  applySettings();
+  giveAmmo(S.playerTeam === 't' ? 'glock18' : 'usp');
   nextRound();
 }
 
@@ -2192,17 +2601,9 @@ export function updateGame(dt) {
   updateGrenades(d);
   updateSmokes(d);
   updateDebris(d);
+  tickPlayerC4(d);
+  tickDrops(d);
 
-  if (S.player.dead) {
-    const live = S.allies.find(a => a.enabled && a.health > 0);
-    if (live) {
-      S.player.pos[0] = live.pos[0];
-      S.player.pos[1] = live.pos[1] + 0.1;
-      S.player.pos[2] = live.pos[2];
-      S.player.yaw = live.yaw;
-      S.player.pitch = 0;
-    }
-  }
   S.whiteFlash = Math.max(0, S.whiteFlash - d * 170);
   S.redFlash = Math.max(0, S.redFlash - d * 220);
 }

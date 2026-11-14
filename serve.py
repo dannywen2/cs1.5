@@ -34,6 +34,7 @@ ALLOW_FILES = {
     'web/package.json',
     'web/README.md',
     'radar_v2.png',
+    'assets/extra.manifest.json',
 }
 ALLOW_PREFIXES = (
     'web/vendor/',      # three.js
@@ -41,7 +42,9 @@ ALLOW_PREFIXES = (
     'assets/sky/',      # 天空盒六面
     'assets/player/',   # 人物/武器模型 + 贴图
     'assets/vm/',       # 第一人称枪模
-    'assets/sfx/',      # 音效 (64 个 wav)
+    'assets/sfx/',      # 音效 (79 个 wav)
+    'assets/sprites/',  # HUD / 武器图标精灵
+    'assets/overviews/',# de_dust2 俯视图
 )
 ALLOW_EXACT_ASSETS = {
     'assets/dust2.geo',

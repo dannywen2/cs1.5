@@ -1,0 +1,33 @@
+{
+  "generated_by": "hlsrc/bake_extra.py",
+  "sfx": {
+    "fire_usp_sil": "assets/sfx/fire_usp_sil.wav",
+    "fire_m4a1_sil": "assets/sfx/fire_m4a1_sil.wav",
+    "shell1": "assets/sfx/shell1.wav",
+    "shell2": "assets/sfx/shell2.wav",
+    "shell3": "assets/sfx/shell3.wav",
+    "radio_enemy": "assets/sfx/radio_enemy.wav",
+    "radio_needbackup": "assets/sfx/radio_needbackup.wav",
+    "step_conc": "assets/sfx/step_conc.wav",
+    "step_metal": "assets/sfx/step_metal.wav",
+    "step_wood": "assets/sfx/step_wood.wav",
+    "step_tile": "assets/sfx/step_tile.wav",
+    "ric_wood": "assets/sfx/ric_wood.wav",
+    "blood1": "assets/sfx/blood1.wav",
+    "c4_disarmed": "assets/sfx/c4_disarmed.wav",
+    "round_start": "assets/sfx/round_start.wav"
+  },
+  "sprites": {
+    "blood": "assets/sprites/blood.png",
+    "muzzle": "assets/sprites/muzzle.png",
+    "kill_default": "assets/sprites/kill_default.png",
+    "kill_headshot": "assets/sprites/kill_headshot.png",
+    "kill_knife": "assets/sprites/kill_knife.png",
+    "kill_awp": "assets/sprites/kill_awp.png",
+    "kill_grenade": "assets/sprites/kill_grenade.png"
+  },
+  "overviews": {
+    "dust2": "assets/overviews/dust2.png"
+  },
+  "notes": "由 hlsrc/bake_extra.py 烘焙的额外静态资产; 只新增文件, 不改动 web/、serve.py 与原有 assets/ 内容。\n音效共 15 个, 全部为可直接被 wave.open() 解码的标准 PCM mono wav:\n  A. 原版直接复制 9 个 (shell1, shell2, shell3, radio_enemy, radio_needbackup, step_conc, step_metal, step_tile, c4_disarmed): 来自 cstrike/sound/ 下的 player/pl_shell1~3、radio/ct_enemys、radio/ct_backup、player/pl_step1、pl_metal1、pl_tile1、weapons/c4_disarmed; 保持原版 8bit PCM / 采样率 (多为 22050Hz, 脚步为 11025Hz)。\n  B. 标准库合成 6 个 (fire_usp_sil, fire_m4a1_sil, step_wood, ric_wood, blood1, round_start): 全部由既有 assets/sfx/*.wav 经一阶低通、线性变调、增益、截断淡出、短延迟空腔、拼接生成; 输出 16bit PCM mono, 采样率 22050Hz (step_wood 保持来源 11025Hz)。\n  说明: 原版 weapons/usp1.wav 与 weapons/m4a1-1.wav 本身即消音射击声, 但已被既有 fire_usp.wav / fire_m4a1.wav 占用, 故两个 *_sil 采用二次闷化合成版本以听感区分; CS 1.5 无独立木头脚步/木头跳弹/blood/回合开始采样, 这些按上述方式补齐。\n贴图共 7 张 RGBA8 PNG (filter 0 或 Pillow 编码): blood/muzzle 为 128x128 透明柔边贴花, 5 个 kill_* 图标为 48x48 透明底, 配色用 CS 黄白红; 全部由解析式距离场 + 超采样程序化绘制, 未取用原版 .spr (其私有调色板格式不适合直接当网页贴图)。\n俯视图: 原版 cstrike/overviews/de_dust2.bmp (1024x768) 转换为 512x384 PNG, 并把地图外的纯绿底色替换为深色; 尺寸 512x384, 不超过 512x512。\n图片解码/编码优先使用 Pillow (若已安装), 否则自动降级为纯 zlib+struct 的 PNG 编码器与 BMP/PNG 解析器; 无需安装依赖。\n逐资源来源: fire_usp_sil=合成: 既有 fire_usp.wav 低通/降调/降音量/截尾; fire_m4a1_sil=合成: 既有 fire_m4a1.wav 低通/降调/降音量/截尾; shell1=原版复制 cstrike/sound/player/pl_shell1.wav (弹壳落地 1); shell2=原版复制 cstrike/sound/player/pl_shell2.wav (弹壳落地 2); shell3=原版复制 cstrike/sound/player/pl_shell3.wav (弹壳落地 3); radio_enemy=原版复制 cstrike/sound/radio/ct_enemys.wav (CT 无线电: 发现敌人); radio_needbackup=原版复制 cstrike/sound/radio/ct_backup.wav (CT 无线电: 请求支援); step_conc=原版复制 cstrike/sound/player/pl_step1.wav (水泥/硬地脚步); step_metal=原版复制 cstrike/sound/player/pl_metal1.wav (金属地面脚步); step_wood=合成: 既有 footstep2.wav 低通/空腔延迟/降调; step_tile=原版复制 cstrike/sound/player/pl_tile1.wav (瓷砖地面脚步); ric_wood=合成: 既有 ric_conc.wav 低通/降调/截短; blood1=合成: 既有 hit.wav 低通截断 + 湿润尾巴拼接; c4_disarmed=原版复制 cstrike/sound/weapons/c4_disarmed.wav (拆弹成功提示 (原版 c4_disarmed)); round_start=合成: 既有 buy.wav 截取电子音后上行三音拼接\n贴图来源: blood=程序化: 暗红不规则血泊 + 卫星血滴, 柔边透明; muzzle=程序化: 五角星芒 + 白黄核心 + 橙色辉光, 透明; kill_default=程序化: 黄色步枪剪影图标; kill_headshot=程序化: 头部剪影 + 红色命中点; kill_knife=程序化: 银白刀身 + 黄色刀柄; kill_awp=程序化: 狙击准星 (双环 + 密位刻度); kill_grenade=程序化: 手雷 + 拉环 + 红色爆星"
+}

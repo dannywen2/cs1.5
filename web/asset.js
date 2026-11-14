@@ -59,130 +59,166 @@ export const WEAPONS = {
   knife: {
     name: '匕首', dmg: 55, pellets: 1, interval: 0.45, clip_size: null, reserve: null,
     spread: 0, recoil: 0.5, armor_ratio: 0.5, range_mod: 1, price: 0, kill_reward: 1500,
-    melee: true, auto: false, slot: 3, team: null, sfx: 'knife', reload_sfx: null, kind: 'knife',
+    melee: true, auto: false, slot: 3, team: null, sfx: 'knife', reload_sfx: null, kind: 'knife', crosshair: 't',
   },
 
   // ---------------- 手枪 ----------------
   glock18: {
     name: 'Glock-18', dmg: 25, pellets: 1, interval: 0.15, clip_size: 20, reserve: 120,
     spread: 0.013, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 400, kill_reward: 300,
-    melee: false, auto: true, slot: 2, team: 't', sfx: 'fire_glock18', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: true, slot: 2, team: 't', sfx: 'fire_glock18', reload_sfx: 'reload_pistol', kind: 'pistol', burst: true, crosshair: 'cross',
   },
   usp: {
     name: 'USP', dmg: 34, pellets: 1, interval: 0.15, clip_size: 12, reserve: 100,
     spread: 0.010, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 500, kill_reward: 300,
-    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_usp', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_usp', reload_sfx: 'reload_pistol', kind: 'pistol', silencer: true, crosshair: 'cross',
   },
   p228: {
     name: 'P228', dmg: 32, pellets: 1, interval: 0.15, clip_size: 13, reserve: 52,
     spread: 0.011, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 600, kill_reward: 300,
-    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_p228', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_p228', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   deagle: {
     name: 'Desert Eagle', dmg: 53, pellets: 1, interval: 0.30, clip_size: 7, reserve: 35,
     spread: 0.012, recoil: 2.2, armor_ratio: 0.5, range_mod: 0.98, price: 650, kill_reward: 300,
-    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_deagle', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: false, slot: 2, team: null, sfx: 'fire_deagle', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   elite: {
     name: '双 Beretta', dmg: 38, pellets: 1, interval: 0.10, clip_size: 15, reserve: 120,
     spread: 0.013, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 1000, kill_reward: 300,
-    melee: false, auto: false, slot: 2, team: 't', sfx: 'fire_elite', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: false, slot: 2, team: 't', sfx: 'fire_elite', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   fiveseven: {
     name: 'Five-SeveN', dmg: 27, pellets: 1, interval: 0.15, clip_size: 20, reserve: 100,
     spread: 0.011, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 750, kill_reward: 300,
-    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_fiveseven', reload_sfx: 'reload_pistol', kind: 'pistol',
+    melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_fiveseven', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
 
   // ---------------- 霰弹枪 ----------------
   m3: {
     name: 'M3 Super90', dmg: 24, pellets: 9, interval: 0.85, clip_size: 8, reserve: 32,
     spread: 0.045, recoil: 3.0, armor_ratio: 0.5, range_mod: 0.90, price: 1700, kill_reward: 900,
-    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_m3', reload_sfx: 'reload_shotgun', kind: 'shotgun',
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_m3', reload_sfx: 'reload_shotgun', kind: 'shotgun', crosshair: 'dot',
   },
   xm1014: {
     name: 'XM1014', dmg: 20, pellets: 6, interval: 0.30, clip_size: 7, reserve: 32,
     spread: 0.050, recoil: 2.6, armor_ratio: 0.5, range_mod: 0.88, price: 3000, kill_reward: 900,
-    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_xm1014', reload_sfx: 'reload_shotgun', kind: 'shotgun',
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_xm1014', reload_sfx: 'reload_shotgun', kind: 'shotgun', crosshair: 'dot',
   },
 
   // ---------------- 冲锋枪 ----------------
   tmp: {
     name: 'TMP', dmg: 20, pellets: 1, interval: 0.07, clip_size: 30, reserve: 120,
     spread: 0.018, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 1250, kill_reward: 600,
-    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_tmp', reload_sfx: 'reload_smg', kind: 'smg',
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_tmp', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   mac10: {
     name: 'MAC-10', dmg: 29, pellets: 1, interval: 0.07, clip_size: 30, reserve: 100,
     spread: 0.020, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.94, price: 1400, kill_reward: 600,
-    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_mac10', reload_sfx: 'reload_smg', kind: 'smg',
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_mac10', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   mp5: {
     name: 'MP5 Navy', dmg: 27, pellets: 1, interval: 0.08, clip_size: 30, reserve: 120,
     spread: 0.017, recoil: 1.1, armor_ratio: 0.6, range_mod: 0.96, price: 1500, kill_reward: 600,
-    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_mp5', reload_sfx: 'reload_smg', kind: 'smg',
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_mp5', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   ump45: {
     name: 'UMP45', dmg: 30, pellets: 1, interval: 0.09, clip_size: 25, reserve: 100,
     spread: 0.017, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.96, price: 1700, kill_reward: 600,
-    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_ump45', reload_sfx: 'reload_smg', kind: 'smg',
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_ump45', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   p90: {
     name: 'P90', dmg: 21, pellets: 1, interval: 0.07, clip_size: 50, reserve: 100,
     spread: 0.016, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 2750, kill_reward: 600,
-    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_p90', reload_sfx: 'reload_smg', kind: 'smg',
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_p90', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
 
   // ---------------- 步枪 ----------------
   ak47: {
     name: 'AK-47', dmg: 36, pellets: 1, interval: 0.095, clip_size: 30, reserve: 90,
     spread: 0.016, recoil: 1.7, armor_ratio: 0.775, range_mod: 0.98, price: 2500, kill_reward: 300,
-    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_ak47', reload_sfx: 'reload_rifle', kind: 'rifle',
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_ak47', reload_sfx: 'reload_rifle', kind: 'rifle', crosshair: 'cross',
   },
   m4a1: {
     name: 'M4A1', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
     spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3100, kill_reward: 300,
-    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_m4a1', reload_sfx: 'reload_rifle', kind: 'rifle',
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_m4a1', reload_sfx: 'reload_rifle', kind: 'rifle', silencer: true, crosshair: 'cross',
   },
   sg552: {
     name: 'SG552 Commando', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
     spread: 0.016, recoil: 1.5, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
-    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_sg552', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true,
+    melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_sg552', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true, zoomLevels: [40], crosshair: 'cross',
   },
   aug: {
     name: 'AUG', dmg: 32, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
     spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
-    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_aug', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true,
+    melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_aug', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true, zoomLevels: [40], crosshair: 'cross',
   },
 
   // ---------------- 狙击枪 ----------------
   scout: {
     name: 'Steyr Scout', dmg: 75, pellets: 1, interval: 0.65, clip_size: 10, reserve: 90,
     spread: 0.001, recoil: 2.5, armor_ratio: 0.6, range_mod: 0.98, price: 2750, kill_reward: 300,
-    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_scout', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_scout', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true, zoomLevels: [40], crosshair: 'scope',
   },
   awp: {
     name: 'AWP', dmg: 115, pellets: 1, interval: 1.45, clip_size: 10, reserve: 30,
     spread: 0.001, recoil: 3.5, armor_ratio: 0.7, range_mod: 0.99, price: 4750, kill_reward: 100,
-    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_awp', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+    melee: false, auto: false, slot: 1, team: null, sfx: 'fire_awp', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true, zoomLevels: [40, 15], crosshair: 'scope',
   },
   g3sg1: {
     name: 'G3SG1', dmg: 80, pellets: 1, interval: 0.40, clip_size: 20, reserve: 90,
     spread: 0.002, recoil: 2.6, armor_ratio: 0.7, range_mod: 0.98, price: 5000, kill_reward: 300,
-    melee: false, auto: false, slot: 1, team: 't', sfx: 'fire_g3sg1', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+    melee: false, auto: false, slot: 1, team: 't', sfx: 'fire_g3sg1', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true, zoomLevels: [40, 15], crosshair: 'scope',
   },
   sg550: {
     name: 'SG550', dmg: 70, pellets: 1, interval: 0.40, clip_size: 20, reserve: 90,
     spread: 0.002, recoil: 2.4, armor_ratio: 0.7, range_mod: 0.98, price: 4200, kill_reward: 300,
-    melee: false, auto: false, slot: 1, team: 'ct', sfx: 'fire_sg550', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true,
+    melee: false, auto: false, slot: 1, team: 'ct', sfx: 'fire_sg550', reload_sfx: 'reload_sniper', kind: 'sniper', zoom: true, zoomLevels: [40, 15], crosshair: 'scope',
   },
 
   // ---------------- 机枪 ----------------
   m249: {
     name: 'M249', dmg: 32, pellets: 1, interval: 0.08, clip_size: 100, reserve: 200,
     spread: 0.020, recoil: 1.6, armor_ratio: 0.7, range_mod: 0.97, price: 5750, kill_reward: 300,
-    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_m249', reload_sfx: 'reload_m249', kind: 'mg',
+    melee: false, auto: true, slot: 1, team: null, sfx: 'fire_m249', reload_sfx: 'reload_m249', kind: 'mg', crosshair: 'cross',
   },
+};
+
+// ---------------------------------------------------------------------------
+// 确定性后坐力弹道 (供 engine.js 的 S.recoil 逐发读取)
+//
+// 每项是 [yawOffsetDeg, pitchOffsetDeg], 角度制; 不含 Math.random(), 同一把枪
+// 每次停火 0.35s 后都从 index 0 重放同一条弹道。基准形态取自 CS 的观感:
+// 前 3 发几乎垂直上跳 (pitch 0.35 -> 0.62 -> 1.05, yaw 近 0), 之后左右交替
+// 摆动 (yaw ±0.4~±1.0, pitch 稳在 0.5~1.0)。每把枪的整条弹道按 WEAPONS
+// 里的 recoil 倍数放大 (手枪 0.9~1.0 / SMG 1.0~1.2 / AK·M4 1.4~1.7 /
+// 狙击 2.5~3.5, 狙击靠 interval 的大间隔给足回位时间)。仅列有弹匣的枪,
+// knife 没有弹道; WEAPONS 内不写 recoilPattern, 由调用方回退到此表。
+// ---------------------------------------------------------------------------
+export const RECOIL_PATTERNS = {
+  glock18:   [[0, 0.32], [0.05, 0.56], [-0.07, 0.95], [0.43, 0.65], [-0.56, 0.77], [0.70, 0.61], [-0.83, 0.81], [0.59, 0.54]],
+  usp:       [[0, 0.35], [0.05, 0.62], [-0.08, 1.05], [0.48, 0.72], [-0.62, 0.86], [0.78, 0.68], [-0.92, 0.90], [0.66, 0.60]],
+  p228:      [[0, 0.35], [0.05, 0.62], [-0.08, 1.05], [0.48, 0.72], [-0.62, 0.86], [0.78, 0.68], [-0.92, 0.90], [0.66, 0.60]],
+  deagle:    [[0, 0.77], [0.11, 1.36], [-0.18, 2.31], [1.06, 1.58], [-1.36, 1.89], [1.72, 1.50], [-2.02, 1.98], [1.45, 1.32]],
+  elite:     [[0, 0.35], [0.05, 0.62], [-0.08, 1.05], [0.48, 0.72], [-0.62, 0.86], [0.78, 0.68], [-0.92, 0.90], [0.66, 0.60]],
+  fiveseven: [[0, 0.32], [0.05, 0.56], [-0.07, 0.95], [0.43, 0.65], [-0.56, 0.77], [0.70, 0.61], [-0.83, 0.81], [0.59, 0.54]],
+  m3:        [[0, 1.05], [0.15, 1.86], [-0.24, 3.15], [1.44, 2.16], [-1.86, 2.58], [2.34, 2.04], [-2.76, 2.70], [1.98, 1.80]],
+  xm1014:    [[0, 0.91], [0.13, 1.61], [-0.21, 2.73], [1.25, 1.87], [-1.61, 2.24], [2.03, 1.77], [-2.39, 2.34], [1.72, 1.56]],
+  tmp:       [[0, 0.35], [0.05, 0.62], [-0.08, 1.05], [0.48, 0.72], [-0.62, 0.86], [0.78, 0.68], [-0.92, 0.90], [0.66, 0.60]],
+  mac10:     [[0, 0.42], [0.06, 0.74], [-0.10, 1.26], [0.58, 0.86], [-0.74, 1.03], [0.94, 0.82], [-1.10, 1.08], [0.79, 0.72]],
+  mp5:       [[0, 0.39], [0.06, 0.68], [-0.09, 1.16], [0.53, 0.79], [-0.68, 0.95], [0.86, 0.75], [-1.01, 0.99], [0.73, 0.66]],
+  ump45:     [[0, 0.42], [0.06, 0.74], [-0.10, 1.26], [0.58, 0.86], [-0.74, 1.03], [0.94, 0.82], [-1.10, 1.08], [0.79, 0.72]],
+  p90:       [[0, 0.35], [0.05, 0.62], [-0.08, 1.05], [0.48, 0.72], [-0.62, 0.86], [0.78, 0.68], [-0.92, 0.90], [0.66, 0.60]],
+  ak47:      [[0, 0.60], [0.09, 1.05], [-0.14, 1.79], [0.82, 1.22], [-1.05, 1.46], [1.33, 1.16], [-1.56, 1.53], [1.12, 1.02]],
+  m4a1:      [[0, 0.49], [0.07, 0.87], [-0.11, 1.47], [0.67, 1.01], [-0.87, 1.20], [1.09, 0.95], [-1.29, 1.26], [0.92, 0.84]],
+  sg552:     [[0, 0.53], [0.08, 0.93], [-0.12, 1.58], [0.72, 1.08], [-0.93, 1.29], [1.17, 1.02], [-1.38, 1.35], [0.99, 0.90]],
+  aug:       [[0, 0.49], [0.07, 0.87], [-0.11, 1.47], [0.67, 1.01], [-0.87, 1.20], [1.09, 0.95], [-1.29, 1.26], [0.92, 0.84]],
+  scout:     [[0, 0.88], [0.13, 1.55], [-0.20, 2.63], [1.20, 1.80], [-1.55, 2.15], [1.95, 1.70], [-2.30, 2.25], [1.65, 1.50]],
+  awp:       [[0, 1.23], [0.18, 2.17], [-0.28, 3.68], [1.68, 2.52], [-2.17, 3.01], [2.73, 2.38], [-3.22, 3.15], [2.31, 2.10]],
+  g3sg1:     [[0, 0.91], [0.13, 1.61], [-0.21, 2.73], [1.25, 1.87], [-1.61, 2.24], [2.03, 1.77], [-2.39, 2.34], [1.72, 1.56]],
+  sg550:     [[0, 0.84], [0.12, 1.49], [-0.19, 2.52], [1.15, 1.73], [-1.49, 2.06], [1.87, 1.63], [-2.21, 2.16], [1.58, 1.44]],
+  m249:      [[0, 0.56], [0.08, 0.99], [-0.13, 1.68], [0.77, 1.15], [-0.99, 1.38], [1.25, 1.09], [-1.47, 1.44], [1.06, 0.96]],
 };
 
 // 部位伤害倍率 (CS 1.5 hitbox): 头 4x, 胸腹 1x, 手臂 0.5x, 腿 0.75x
@@ -353,6 +389,11 @@ export const SFX_NAMES = [
   'reload_m249', 'ric1', 'ric2', 'ric_metal', 'ric_conc', 'bullet_hit',
   'dryfire_pistol', 'dryfire_rifle', 'zoom', 'knife_stab', 'knife_hitwall',
   'he_bounce', 'grenade_hit', 'hegrenade',
+  // 新增: 消音开火 / 弹壳 / 无线电 / 材质脚步 / 木头跳弹 / 血迹 / C4 / 回合
+  'fire_usp_sil', 'fire_m4a1_sil', 'shell1', 'shell2', 'shell3',
+  'radio_enemy', 'radio_needbackup', 'step_conc', 'step_metal',
+  'step_wood', 'step_tile', 'ric_wood', 'blood1', 'c4_disarmed',
+  'round_start',
 ];
 
 // ---------------------------------------------------------------------------
@@ -378,6 +419,9 @@ const WORLD_TEX = { wrap: THREE.RepeatWrapping, mipmaps: true, anisotropy: 4 };
 const MODEL_TEX = { wrap: THREE.ClampToEdgeWrapping, mipmaps: true, anisotropy: 1 };
 const SKY_TEX = { wrap: THREE.ClampToEdgeWrapping, mipmaps: true, anisotropy: 4 };
 const RADAR_TEX = { wrap: THREE.ClampToEdgeWrapping, mipmaps: false, anisotropy: 1 };
+// 特效 sprite / 总览图: 不重复平铺, 不做 mipmap (configureTexture 据此选
+// LinearFilter + SRGBColorSpace), 避免小 sprite 缩小时糊成一团。
+const EFFECT_TEX = { wrap: THREE.ClampToEdgeWrapping, mipmaps: false, anisotropy: 1 };
 
 // ---------------------------------------------------------------------------
 // 二进制解析
@@ -696,6 +740,52 @@ export function cellPos(cx, cy, h = 0) {
   return [NAV_WX0 + (cx + 0.5) * CELL, h, NAV_WY0 + (cy + 0.5) * CELL];
 }
 
+// ---------------------------------------------------------------------------
+// 表面材质 (脚步声 / 跳弹音效 / 弹孔外观按材质区分)
+//
+// 这是近似映射, 不是逐面精确查询: 真实 GoldSrc 从命中面的 texinfo 取
+// surfaceprop (每个 brush 面都有自己的材质), 而烘焙出的 .geo/.meta 只保留
+// 了贴图文件名, 没导出 texinfo。这里改成基于导航格坐标的确定性哈希查表,
+// 同一区域 (同一格) 的材质恒定、跨格有空间变化, 且不依赖 S / 不 import
+// state.js, 缺资源时也不会抛错。
+//
+// SURFACE_MATERIAL 是调试/未来精确化用的静态分组: 把 assets/tex/t000.png ~
+// t043.png 的 basename (t000~t043) 按同一个哈希规则归档。贴图索引 i 被当作
+// 伪格坐标 (cx = i % 5, cy = floor(i / 5)) 代入 materialBucket(), 得到下面
+// 五组; 写实际分组而非运行时生成, 方便直接对照 meta.json 的 groups[].tex。
+// ---------------------------------------------------------------------------
+export const SURFACE_MATERIAL = {
+  concrete: ['t000', 't001', 't002', 't003', 't004', 't005', 't006', 't007', 't008', 't009', 't010', 't011', 't012', 't013', 't014', 't015', 't016', 't017', 't020', 't021', 't034', 't037', 't038', 't039', 't040', 't041', 't042', 't043'],
+  metal:    ['t018', 't019', 't022', 't023', 't025', 't026'],
+  wood:     ['t024', 't027', 't030'],
+  tile:     ['t028', 't029', 't031', 't032', 't035'],
+  dirt:     ['t033', 't036'],
+};
+
+function materialBucket(h) {
+  if (h < 60) return 'concrete';
+  if (h < 75) return 'metal';
+  if (h < 85) return 'wood';
+  if (h < 95) return 'tile';
+  return 'dirt';
+}
+
+// pos 为单参数, 支持 {x,y,z} / [x,y,z] / [x,z] 数组 (与 cellOf 的单参数
+// 用法一致)。返回 'concrete' | 'metal' | 'wood' | 'tile' | 'dirt' 之一;
+// 异常入参兜底为 'concrete', 保证脚步/跳弹音效永远能取到有效键。
+export function materialAt(pos) {
+  let cx, cy;
+  try {
+    [cx, cy] = cellOf(pos);
+  } catch (_) {
+    return 'concrete';
+  }
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return 'concrete';
+  // 取模前先归一到非负数: 负格坐标也要有稳定的空间哈希
+  const h = ((cx * 7 + cy * 13) % 100 + 100) % 100;
+  return materialBucket(h);
+}
+
 // 优先取不高于 near 的最高层 (沿用 Python 的 +4 容差); 空格返回 null
 export function surfaceAt(cx, cy, near = null) {
   const ls = layers(cx, cy);
@@ -968,8 +1058,6 @@ class MinHeap {
   }
 }
 
-const stateKey = s => `${s[0]},${s[1]},${s[2]}`;
-
 function asCell(v) {
   if (Array.isArray(v)) return v.length === 2 ? [Math.floor(v[0]), Math.floor(v[1])] : cellOf(v);
   if (v && typeof v === 'object' && Number.isFinite(v.cx)) return [Math.floor(v.cx), Math.floor(v.cy)];
@@ -1059,7 +1147,6 @@ const flowCache = new Map();
 // 目标用单次 A* 更划算 (~1~6 ms 且不会把整帧预算吃光)。
 // 因此流场只对 S.assets 里登记的热点目标生效, 其余走 A*。
 const FLOW_HOT_GOALS = new Set();
-let flowBudgetHitCount = 0;
 
 export function registerFlowGoal(cell, layer = 0) {
   if (!Array.isArray(cell) || cell.length < 2) return;
@@ -1073,7 +1160,6 @@ export function registerFlowGoal(cell, layer = 0) {
 
 export function clearFlowGoals() {
   FLOW_HOT_GOALS.clear();
-  flowBudgetHitCount = 0;
 }
 
 // 预建所有热点流场。建一个场约 13 ms, 两个包点合计 ~26 ms —— 放在加载界面
@@ -1677,7 +1763,22 @@ export async function loadAll(onProgress = null) {
   // radar_v2.png 在项目根目录, 不在 assets/
   job('radar', loadTexture(`${ROOT}radar_v2.png`, RADAR_TEX));
 
-  const [meta, geoBuf, navBuf, colBuf, hitBuf, worldTex, animEntries, , , skyEntries, audioEntries, radarTexture] =
+  // 7 张特效 sprite + 1 张总览图: 都是可选资源, loadTexture(required=false)
+  // 在 404 / 配置失败时只 warn 并 resolve(null), 不会让整个 boot 失败。
+  // 解构顺序固定: [blood, muzzle, kill_default, kill_headshot, kill_knife,
+  //                kill_awp, kill_grenade, overview]
+  job('effects', Promise.all([
+    loadTexture(`${ASSET}sprites/blood.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/muzzle.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/kill_default.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/kill_headshot.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/kill_knife.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/kill_awp.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}sprites/kill_grenade.png`, EFFECT_TEX),
+    loadTexture(`${ASSET}overviews/dust2.png`, EFFECT_TEX),
+  ]));
+
+  const [meta, geoBuf, navBuf, colBuf, hitBuf, worldTex, animEntries, , , skyEntries, audioEntries, radarTexture, effectTex] =
     await Promise.all(jobs);
 
   navState = navBuf ? parseNav(navBuf) : null;
@@ -1702,6 +1803,17 @@ export async function loadAll(onProgress = null) {
   const vm = {};
   for (const name of VM_NAMES) vm[name] = loadModel('vm', name);
 
+  const [blood, muzzle, killDefault, killHeadshot, killKnife, killAwp, killGrenade, overview] = effectTex || [];
+  const sprites = {
+    blood: blood || null,
+    muzzle: muzzle || null,
+    kill_default: killDefault || null,
+    kill_headshot: killHeadshot || null,
+    kill_knife: killKnife || null,
+    kill_awp: killAwp || null,
+    kill_grenade: killGrenade || null,
+  };
+
   // bot 行走动画: 解析成逐帧 float32 位置表
   for (const [name, buf] of animEntries) {
     if (!buf) continue;
@@ -1723,6 +1835,8 @@ export async function loadAll(onProgress = null) {
     anims: Object.fromEntries(ANIM_TEMPLATES),
     vm,
     audio,
+    sprites,
+    overview: overview || null,
     radarTexture,
     meta,
     worldTextures: worldTex,

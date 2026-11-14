@@ -4,7 +4,7 @@
 // three.js 相机默认朝 -z 且为右手系, 两者之间需要一次反射, 见 calibrateCamera()。
 import * as THREE from './vendor/three.module.js';
 import * as A from './asset.js';
-import { S, clamp, rand, choice, forwardVec, rightVec, yawTo, fmtTime, play, showCenter, reportPlayer, hitText, giveAmmo, dist3 } from './state.js';
+import { S, clamp, rand, choice, forwardVec, rightVec, yawTo, play, showCenter, reportPlayer, hitText, giveAmmo, dist3, notifyGunfire } from './state.js';
 
 const DEG = Math.PI / 180;
 // 鼠标: 每 "count" (浏览器 movementX 单位) 转多少度, 再乘玩家灵敏度倍率。
@@ -18,16 +18,43 @@ const HOLE_TTL = 12;
 const MAX_HOLES = 40;
 const BOT_HALF = 16;
 const BOT_HEIGHT = 72;
+const MAX_SHELLS = 24;
+const MAX_BLOOD = 30;
+const MAX_TRACERS = 32;
+const SHELL_TTL = 1.2;
+const TRACER_TTL = 0.07;
+const BLOOD_TTL = 20;
+const SPECTATE_CYCLE = 4;
+const RECOIL_RESET = 0.35;
+const RECOIL_DIR_SCALE = 0.45;
+const STEP_MATERIALS = {
+  concrete: 'step_conc', metal: 'step_metal', wood: 'step_wood',
+  tile: 'step_tile', dirt: 'step_conc',
+};
+const RIC_MATERIALS = {
+  metal: 'ric_metal', concrete: 'ric_conc', wood: 'ric_wood',
+  tile: 'ric_conc', dirt: 'ric_conc',
+};
+// asset.js 扩展前的兜底: 有 zoomLevels 时以武器表为准
+const ZOOM_FALLBACK = {
+  awp: [40, 15], sg550: [40, 15], g3sg1: [40, 15],
+  scout: [40], aug: [40], sg552: [40],
+};
 
 let renderer = null;
 let scene = null, camera = null;
 let skyScene = null, skyCamera = null, skyRoot = null;
 let vmScene = null, vmCamera = null, vmGroup = null, vmRoot = null, vmWrapper = null;
 let muzzle = null, muzzleUntil = 0, vmWeapon = null;
+let worldMuzzleLight = null, vmMuzzleLight = null, muzzleLightUntil = 0;
 let vmBasePos = [0, 0, 0], vmBaseRot = [0, 0, 0], vmSwing = 0;
-let lastFootstep = 0;      // 上一个脚步声编号, 避免连续重复
 let defuseAmt = 0;         // 拆弹/下包姿态过渡量 0..1
 let engineTime = 0;
+let lastSpectateCycle = -99;
+let burstQueue = 0, burstWid = null, burstLatch = false;
+const shellGeo = new THREE.CylinderGeometry(0.9, 0.9, 3.2, 6);
+const shellMat = new THREE.MeshBasicMaterial({ color: 0xc9923a, side: THREE.DoubleSide });
+const bloodGeo = new THREE.PlaneGeometry(16, 16);
 
 // 相机欧拉参数由 calibrateCamera() 实测确定 (不写死符号, 便于换 three.js 版本)
 let pitchSign = -1, yawSign = 1, yawOffset = Math.PI, mirrorX = false;
@@ -40,6 +67,9 @@ const _v3 = new THREE.Vector3();   // 枪模摆放计算的临时向量
 const _dir = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _up = new THREE.Vector3();
+const _shellPos = new THREE.Vector3();
+const _tracerEnd = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -71,6 +101,271 @@ function posOf(p) {
 }
 
 function eyeHeight() { return S.player.crouching ? CROUCH_EYE : A.EYE_HEIGHT; }
+
+function effectArrays() {
+  if (!S.effects) S.effects = { shells: [], tracers: [], blood: [] };
+  if (!Array.isArray(S.effects.shells)) S.effects.shells = [];
+  if (!Array.isArray(S.effects.tracers)) S.effects.tracers = [];
+  if (!Array.isArray(S.effects.blood)) S.effects.blood = [];
+  return S.effects;
+}
+
+function removeEffect(e) {
+  if (!e || !e.mesh) return;
+  if (e.mesh.parent) e.mesh.parent.remove(e.mesh);
+  if (e.mesh.geometry && !e.sharedGeometry) e.mesh.geometry.dispose();
+  if (e.mesh.material && !e.sharedMaterial) e.mesh.material.dispose();
+}
+
+function trimEffect(list, cap) {
+  while (list.length > cap) removeEffect(list.shift());
+}
+
+function surfaceName(pos) {
+  if (typeof A.materialAt !== 'function') return 'concrete';
+  try { return A.materialAt(pos) || 'concrete'; }
+  catch (_) { return 'concrete'; }
+}
+
+function wallRicochet(point, normal) {
+  // rayHit 的 wall normal 指向射手, 沿它退到墙面外侧再取材质
+  const n = posOf(normal) || [0, 0, 1];
+  const probe = [point[0] + n[0] * 3, point[1] + n[1] * 3, point[2] + n[2] * 3];
+  const name = surfaceName(probe);
+  if (RIC_MATERIALS[name]) return RIC_MATERIALS[name];
+  return Math.random() < 0.5 ? 'ric1' : 'ric2';
+}
+
+function updateMuzzleLight() {
+  if (!worldMuzzleLight || !vmMuzzleLight) return;
+  const left = muzzleLightUntil - engineTime;
+  const k = clamp(left / 0.06, 0, 1);
+  worldMuzzleLight.intensity = 22 * k;
+  vmMuzzleLight.intensity = 1.8 * k;
+  if (camera) {
+    worldMuzzleLight.position.copy(camera.position);
+    const f = forwardVec(S.player.yaw, S.player.pitch);
+    worldMuzzleLight.position.x += f[0] * 12;
+    worldMuzzleLight.position.y += f[1] * 12;
+    worldMuzzleLight.position.z += f[2] * 12;
+  }
+}
+
+function flashMuzzleLight() {
+  muzzleLightUntil = engineTime + 0.06;
+  updateMuzzleLight();
+}
+
+// ---------------------------------------------------------------------------
+// 弹壳 / 曳光弹 / 血迹: 网格归 engine.js 所有, 数组与 game.js 共享
+// ---------------------------------------------------------------------------
+function spawnShell(origin, fwd, right, up) {
+  if (!scene) return;
+  const shells = effectArrays().shells;
+  const mesh = new THREE.Mesh(shellGeo, shellMat);
+  _shellPos.copy(origin)
+    .addScaledVector(fwd, 24)
+    .addScaledVector(right, 10)
+    .addScaledVector(up, -6);
+  mesh.position.copy(_shellPos);
+  scene.add(mesh);
+  shells.push({
+    mesh, ttl: SHELL_TTL, sharedGeometry: true, sharedMaterial: true,
+    played: false,
+    vel: [right.x * rand(28, 52) + fwd.x * rand(4, 14) + rand(-8, 8),
+      rand(35, 65),
+      right.z * rand(28, 52) + fwd.z * rand(4, 14) + rand(-8, 8)],
+    spin: [rand(-12, 12), rand(-12, 12), rand(-12, 12)],
+  });
+  trimEffect(shells, MAX_SHELLS);
+}
+
+function spawnTracer(origin, fwd, right, up, end) {
+  if (!scene) return;
+  const tracers = effectArrays().tracers;
+  const start = new THREE.Vector3().copy(origin)
+    .addScaledVector(fwd, 18)
+    .addScaledVector(right, 9)
+    .addScaledVector(up, -7);
+  _tracerEnd.set(end[0], end[1], end[2]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([
+    start.x, start.y, start.z, _tracerEnd.x, _tracerEnd.y, _tracerEnd.z,
+  ], 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffe6a0, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const mesh = new THREE.Line(geo, mat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  tracers.push({ mesh, ttl: TRACER_TTL, life: TRACER_TTL });
+  trimEffect(tracers, MAX_TRACERS);
+}
+
+function spawnBlood(point, forward) {
+  if (!scene || typeof A.raySolidDistance !== 'function') return;
+  const d = toVec3(forward).normalize();
+  const ox = point[0] + d.x * 20, oy = point[1] + d.y * 20, oz = point[2] + d.z * 20;
+  const t = A.raySolidDistance(ox, oy, oz, d.x, d.y, d.z, 140);
+  if (!(t >= 0 && t <= 140)) return;
+  const tex = S.assets && S.assets.sprites && S.assets.sprites.blood;
+  const n = [-d.x, -d.y, -d.z];
+  const p = [ox + d.x * t, oy + d.y * t, oz + d.z * t];
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex || null, color: tex ? 0xffffff : 0x8b1010,
+    side: THREE.DoubleSide, transparent: true, opacity: 0.9,
+    depthWrite: false, depthTest: true,
+    polygonOffset: true, polygonOffsetFactor: -2,
+  });
+  const mesh = new THREE.Mesh(bloodGeo, mat);
+  mesh.position.set(p[0] + n[0] * 0.7, p[1] + n[1] * 0.7, p[2] + n[2] * 0.7);
+  mesh.lookAt(p[0] + n[0], p[1] + n[1], p[2] + n[2]);
+  mesh.rotation.z = rand(0, Math.PI * 2);
+  mesh.renderOrder = 2;
+  scene.add(mesh);
+  const blood = effectArrays().blood;
+  blood.push({ mesh, ttl: BLOOD_TTL, life: BLOOD_TTL, sharedGeometry: true });
+  trimEffect(blood, MAX_BLOOD);
+  play('blood1', p);
+}
+
+export function clearEffects() {
+  const fx = effectArrays();
+  for (const list of [fx.shells, fx.tracers, fx.blood]) {
+    while (list.length) removeEffect(list.pop());
+  }
+  if (worldMuzzleLight) worldMuzzleLight.intensity = 0;
+  if (vmMuzzleLight) vmMuzzleLight.intensity = 0;
+  muzzleLightUntil = 0;
+  burstQueue = 0;
+  burstWid = null;
+  burstLatch = false;
+}
+
+function updateEffects(dt) {
+  const fx = effectArrays();
+  const shells = fx.shells;
+  for (let i = shells.length - 1; i >= 0; i--) {
+    const s = shells[i];
+    s.ttl -= dt;
+    if (s.ttl > 0) {
+      s.vel[1] -= A.GRAVITY * dt;
+      s.mesh.position.x += s.vel[0] * dt;
+      s.mesh.position.y += s.vel[1] * dt;
+      s.mesh.position.z += s.vel[2] * dt;
+      s.mesh.rotation.x += s.spin[0] * dt;
+      s.mesh.rotation.y += s.spin[1] * dt;
+      s.mesh.rotation.z += s.spin[2] * dt;
+      const ground = (() => {
+        if (typeof A.surfaceAt !== 'function' || typeof A.cellOf !== 'function') return null;
+        try {
+          const [cx, cz] = A.cellOf(s.mesh.position.x, s.mesh.position.z);
+          return A.surfaceAt(cx, cz, s.mesh.position.y + 4);
+        } catch (_) { return null; }
+      })();
+      const floorY = Number.isFinite(ground) ? ground + 1.6 : 2;
+      if (s.mesh.position.y <= floorY) {
+        s.mesh.position.y = floorY;
+        if (!s.played) {
+          s.played = true;
+          play(`shell${1 + ((Math.random() * 3) | 0)}`, [s.mesh.position.x, s.mesh.position.y, s.mesh.position.z]);
+        }
+        s.ttl = Math.min(s.ttl, 0.25);
+      }
+    }
+    if (s.ttl <= 0) {
+      removeEffect(s);
+      shells.splice(i, 1);
+    }
+  }
+  const tracers = fx.tracers;
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    const t = tracers[i];
+    t.ttl -= dt;
+    if (t.mesh.material) t.mesh.material.opacity = 0.9 * clamp(t.ttl / t.life, 0, 1);
+    if (t.ttl <= 0) {
+      removeEffect(t);
+      tracers.splice(i, 1);
+    }
+  }
+  const blood = fx.blood;
+  for (let i = blood.length - 1; i >= 0; i--) {
+    const b = blood[i];
+    b.ttl -= dt;
+    if (b.mesh.material) b.mesh.material.opacity = 0.9 * clamp(b.ttl / 2, 0, 1);
+    if (b.ttl <= 0) {
+      removeEffect(b);
+      blood.splice(i, 1);
+    }
+  }
+}
+
+function toggleSilencer() {
+  const wid = S.weapon;
+  const wp = A.WEAPONS[wid];
+  const canSilence = !!wp && (wp.silencer || wid === 'usp' || wid === 'm4a1');
+  if (!canSilence) return;
+  if (!S.silenced) S.silenced = {};
+  S.silenced[wid] = !S.silenced[wid];
+  play('deploy');
+  showCenter(`${wp.name} 消音器 ${S.silenced[wid] ? '已开启' : '已关闭'}`, '#b4d2ff', 1.4);
+}
+
+function toggleGlockMode() {
+  S.glockMode = S.glockMode === 'burst' ? 'semi' : 'burst';
+  play('deploy');
+  showCenter(`Glock-18 ${S.glockMode === 'burst' ? '三连发' : '单发'}`, '#b4d2ff', 1.4);
+}
+
+function getSpectate() {
+  // 兼容两种落盘形态: 契约的 S.spectate 与 state.js 里的 S.player.spectate,
+  // 始终让两个字段指向同一个对象, 避免观战状态分裂。
+  const sp = S.spectate || (S.player && S.player.spectate) || {
+    target: null, index: 0, yaw: 0, free: false, freePos: null, targetName: '',
+  };
+  S.spectate = sp;
+  if (S.player) S.player.spectate = sp;
+  return sp;
+}
+
+function cycleSpectate() {
+  const sp = getSpectate();
+  sp.index = (Number(sp.index) || 0) + 1;
+  sp.target = null;
+  sp.targetName = '';
+  if (S.player && S.player.dead) spectatorTarget();
+  else lastSpectateCycle = -99;
+}
+
+function toggleFreeCam() {
+  const sp = getSpectate();
+  sp.free = !sp.free;
+  if (sp.free && !sp.freePos && camera) {
+    sp.freePos = [camera.position.x, camera.position.y, camera.position.z];
+  }
+  showCenter(sp.free ? '自由观战' : '跟随队友', '#b4d2ff', 1.4);
+}
+
+function updateFreeCam(dt) {
+  const sp = getSpectate();
+  if (!sp.free || !S.player.dead || !camera) return;
+  if (!sp.freePos) sp.freePos = [camera.position.x, camera.position.y, camera.position.z];
+  const yaw = Number(sp.yaw) || 0;
+  const f = forwardVec(yaw);
+  const r = rightVec(yaw);
+  const fw = (held('w', 'W', 'KeyW', 'arrowup', 'ArrowUp') ? 1 : 0)
+           - (held('s', 'S', 'KeyS', 'arrowdown', 'ArrowDown') ? 1 : 0);
+  const sd = (held('d', 'D', 'KeyD', 'arrowright', 'ArrowRight') ? 1 : 0)
+           - (held('a', 'A', 'KeyA', 'arrowleft', 'ArrowLeft') ? 1 : 0);
+  const rise = (spaceHeld() ? 1 : 0) - (ctrlHeld() ? 1 : 0)
+             + (held('e', 'E', 'KeyE') ? 1 : 0) - (held('q', 'Q', 'KeyQ') ? 1 : 0);
+  const len = Math.max(1, Math.hypot(fw, sd));
+  const spd = 420 * dt;
+  sp.freePos[0] += (f[0] * fw + r[0] * sd) / len * spd;
+  sp.freePos[2] += (f[2] * fw + r[2] * sd) / len * spd;
+  sp.freePos[1] += rise * spd;
+}
 
 function shiftHeld() { return held('shift', 'Shift', 'shiftleft', 'ShiftLeft', 'shiftright', 'ShiftRight'); }
 function ctrlHeld() { return held('control', 'Control', 'ctrl', 'ControlLeft', 'ControlRight', 'left control', 'right control'); }
@@ -156,16 +451,26 @@ function setFov(fov) {
   // 并挤出画面, 只剩一块残片。VM 永远用自己的固定 FOV。
 }
 
-// 阵亡后的观战目标: 挑一个存活队友, 每 4 秒或目标死亡时轮换。
+// 阵亡后的观战目标: 唯一目标源, 不再依赖 S.player.pos 被传送。
 function spectatorTarget() {
-  const sp = S.spectate || (S.spectate = { target: null, index: 0, yaw: 0 });
-  const pool = (S.allies || []).filter(b => b && b.enabled && b.health > 0);
-  if (!pool.length) return null;
-  if (sp.target && sp.target.enabled && sp.target.health > 0 && pool.includes(sp.target)) {
-    return sp.target;
+  const sp = getSpectate();
+  const pool = (S.allies || []).filter(b => b && b.enabled !== false && b.dead !== true
+    && (b.health === undefined || b.health > 0));
+  if (!pool.length) {
+    sp.target = null;
+    sp.targetName = '';
+    return null;
   }
-  sp.index = (sp.index || 0) % pool.length;
-  sp.target = pool[sp.index];
+  const valid = !!sp.target && sp.target.enabled !== false
+    && (sp.target.health === undefined || sp.target.health > 0) && pool.includes(sp.target);
+  const cycle = S.time - lastSpectateCycle >= SPECTATE_CYCLE;
+  if (!valid || cycle) {
+    const next = (Number(sp.index) || 0) + ((valid && cycle) ? 1 : 0);
+    sp.index = pool.length ? ((next % pool.length) + pool.length) % pool.length : 0;
+    sp.target = pool[sp.index] || null;
+    lastSpectateCycle = S.time;
+  }
+  sp.targetName = (sp.target && sp.target.name) || '';
   return sp.target;
 }
 
@@ -176,9 +481,18 @@ function syncCamera() {
   // 旧实现无论如何都把相机放在玩家位置, 玩家死后位置不变, 相机就卡在尸体里;
   // bot 走近时会直接穿进模型内部 (实测画面 79.7% 是肤色, 能看到头的内侧)。
   if (p.dead) {
+    const sp = getSpectate();
+    if (sp.free) {
+      if (!sp.freePos) sp.freePos = [p.pos[0], p.pos[1] + eyeHeight() + 40, p.pos[2]];
+      camera.position.set(sp.freePos[0], sp.freePos[1], sp.freePos[2]);
+      camera.rotation.set(0, (sp.yaw || 0) * DEG * yawSign + yawOffset, 0, 'YXZ');
+      camera.updateMatrixWorld();
+      skyCamera.quaternion.copy(camera.quaternion);
+      skyCamera.position.set(0, 0, 0);
+      return;
+    }
     const t = spectatorTarget();
     if (t) {
-      const sp = S.spectate;
       // 肩后视角: 目标身后 110 单位、上方 55 单位, 略微偏右
       const yaw = Number.isFinite(t.yaw) ? t.yaw : 0;
       const bx = -Math.sin(yaw * DEG), bz = -Math.cos(yaw * DEG);   // 目标背后
@@ -580,11 +894,13 @@ export function buildViewmodel(wid) {
   let mz = 0;
   if (meta && meta.muzzle && Number.isFinite(meta.muzzle[0])) mz = meta.muzzle[0];
   else if (meta && meta.bbox && meta.bbox[0]) mz = -meta.bbox[0][1];
+  const sprites = (S.assets && S.assets.sprites) || {};
   muzzle = new THREE.Mesh(
     new THREE.PlaneGeometry(1.8, 1.8),
     new THREE.MeshBasicMaterial({
-      color: 0xffe278, side: THREE.DoubleSide,
-      transparent: false, depthTest: false, depthWrite: false,
+      map: sprites.muzzle || null, color: sprites.muzzle ? 0xffffff : 0xffe278,
+      side: THREE.DoubleSide, transparent: !!sprites.muzzle, alphaTest: sprites.muzzle ? 0.02 : 0,
+      depthTest: false, depthWrite: false,
     }),
   );
   // muzzle 挂在 wrapper 下, 烘焙 +z 同样经 z=-1 反射成相机空间的 -z
@@ -667,12 +983,8 @@ function updateVM(dt, moving) {
     S.stepTimer -= dt;
     if (S.stepTimer <= 0) {
       S.stepTimer = shiftHeld() ? 0.32 : 0.42;
-      // CS 1.5 的脚步声是 4 个采样随机轮播, 且不连续重复同一个。
-      // 单一采样会让走路听起来很机械。
-      let n;
-      do { n = 1 + ((Math.random() * 4) | 0); } while (n === lastFootstep);
-      lastFootstep = n;
-      play('footstep' + n);
+      const name = STEP_MATERIALS[surfaceName(S.player.pos)] || 'step_conc';
+      play(name, S.player.pos);
     }
   }
   // 拆弹/下包姿态: 按住 E 拆包时把枪收下去并俯身。
@@ -697,12 +1009,50 @@ function updateVM(dt, moving) {
 // ---------------------------------------------------------------------------
 // 射击
 // ---------------------------------------------------------------------------
+function canFire(ignoreCd = false) {
+  return !!S.shootingEnabled && !S.buyMenuOpen && !S.reloading && (ignoreCd || S.shootCd <= 0)
+    && !S.player.dead && S.BOMB.state !== 'over'
+    && (!S.round || (S.round.phase !== 'freeze' && S.round.phase !== 'over'));
+}
+
+function pumpBurst() {
+  if (!burstQueue) return;
+  if (S.weapon !== burstWid || !canFire(true)) {
+    burstQueue = 0; burstWid = null; return;
+  }
+  burstQueue -= 1;
+  fireOne(true);
+  if (burstQueue) {
+    const wp = A.WEAPONS[burstWid];
+    // interval 是真实时间间隔, setTimeout 不受 updateEngine 的 dt 钳制影响
+    setTimeout(pumpBurst, Math.max(0, (wp && wp.interval ? wp.interval : 0.15)) * 1000);
+  } else {
+    burstWid = null;
+  }
+}
+
 export function shoot() {
-  if (!S.shootingEnabled || S.buyMenuOpen || S.reloading || S.shootCd > 0
-      || S.player.dead || S.BOMB.state === 'over') return;
+  fireOne(false);
+}
+
+function fireOne(fromBurst = false) {
+  if (!canFire(fromBurst)) return;
   const p = S.player;
-  const wp = A.WEAPONS[S.weapon];
+  const wid = S.weapon;
+  const wp = A.WEAPONS[wid];
   if (!wp) return;
+  // 三连发是「按一次左键」触发, 不因按住左键进入自动武器的持续射击
+  const canBurst = wid === 'glock18' && (wp.burst !== false || S.glockMode === 'burst');
+  if (!fromBurst && canBurst && S.glockMode === 'burst') {
+    if (burstQueue || burstLatch) return;
+    burstLatch = true;
+    burstWid = S.weapon;
+    burstQueue = 3;
+    pumpBurst();
+    return;
+  }
+  const canSilence = !!wp && (wp.silencer || wid === 'usp' || wid === 'm4a1');
+  const silenced = canSilence && !!(S.silenced && S.silenced[wid]);
   const origin = new THREE.Vector3(p.pos[0], p.pos[1] + eyeHeight(), p.pos[2]);
 
   if (wp.melee) {
@@ -731,6 +1081,7 @@ export function shoot() {
       if (typeof e.takeDamage === 'function') {
         e.takeDamage(wp.dmg * mult, backstab, S.player.pos, '你', zone);
       }
+      spawnBlood(hit.point, f);
       play('hit');
     } else if (hit.kind === 'wall') {
       addBulletHole(hit.point, hit.normal);
@@ -741,8 +1092,8 @@ export function shoot() {
     return;
   }
 
-  if (!S.ammo[S.weapon]) giveAmmo(S.weapon);
-  const ammo = S.ammo[S.weapon];
+  if (!S.ammo[wid]) giveAmmo(wid);
+  const ammo = S.ammo[wid];
   if (!ammo) return;
   if (ammo[0] <= 0) {
     // 空仓: 手枪是清脆的空击, 步枪是撞针声 (CS 1.5 分两种)
@@ -755,43 +1106,75 @@ export function shoot() {
   hook('updateAmmo');
   S.shootCd = wp.interval;
   S.crossHeat = Math.min(S.crossHeat + 1, 3);
-  play(wp.sfx || 'fire_ak47');
+  play((silenced ? `${wp.sfx}_sil` : wp.sfx) || 'fire_ak47');
   reportPlayer(S.player.pos);
-  // 玩家枪声也广播出去: 敌方 T 会循声包抄, 己方 CT 会来支援
-  if (typeof A.notifyGunfirePlayer === 'function') A.notifyGunfirePlayer();
-  else if (S.hooks && typeof S.hooks.notifyGunfire === 'function') S.hooks.notifyGunfire();
+  // 枪声事件只写一次: 直接调用 state.js 的函数, 不再触发 game.js 注册的 hook
+  notifyGunfire(S.player.pos, S.playerTeam, silenced ? 0.35 : 1);
 
   if (muzzle) {
     muzzle.visible = true;
     muzzle.rotation.z = rand(0, Math.PI / 2);
     muzzleUntil = engineTime + 0.05;
   }
+  flashMuzzleLight();
   S.vmAnim.recoil = 1;
   S.vmAnim.dip = 1;
 
-  const spread = wp.spread * (S.scoped ? 0.3 : 1) * (shiftHeld() ? 2.5 : 1);
   const f = forwardVec(p.yaw, p.pitch);
   const r = rightVec(p.yaw);
-  _fwd.set(f[0], f[1], f[2]);
+  _fwd.set(f[0], f[1], f[2]).normalize();
   _right.set(r[0], r[1], r[2]);
-  const up = new THREE.Vector3().crossVectors(_fwd, _right);
-  p.pitch = clamp(p.pitch - wp.recoil * 0.5, -90, 90);
+  _up.crossVectors(_fwd, _right).normalize();   // 屏幕上方 = forwardVec(yaw, pitch-90)
+  spawnShell(origin, _fwd, _right, _up);
+
+  // 确定性后坐力: 停火 0.35s 后弹道归零, 角度抬枪 + 射线方向同步偏移。
+  const pattern = (Array.isArray(wp.recoilPattern) && wp.recoilPattern.length)
+    ? wp.recoilPattern
+    : ((A.RECOIL_PATTERNS && A.RECOIL_PATTERNS[wid]) || [[0, wp.recoil || 1]]);
+  const rec = S.recoil || (S.recoil = { index: 0, lastAt: -99 });
+  const lastAt = Number.isFinite(rec.lastAt) ? rec.lastAt : -99;
+  if (S.time - lastAt > RECOIL_RESET) rec.index = 0;
+  const step = pattern[(Number(rec.index) || 0) % pattern.length] || [0, 0];
+  const kickYaw = Number(step[0]) || 0;
+  const kickPitch = Math.abs(Number(step[1]) || 0);
+  p.yaw += kickYaw;
+  p.pitch = clamp(p.pitch - kickPitch, -90, 90);
+  rec.index = (Number(rec.index) || 0) + 1;
+  rec.lastAt = S.time;
+
+  const spread = wp.spread * (S.scoped ? 0.3 : 1) * (shiftHeld() ? 2.5 : 1)
+    * (silenced ? 0.85 : 1);
+  const dmgScale = silenced ? 0.9 : 1;
+  const dirYaw = kickYaw * DEG * RECOIL_DIR_SCALE;
+  const dirPitch = kickPitch * DEG * RECOIL_DIR_SCALE;
 
   // 霰弹枪一次打多颗弹丸, 每颗独立散射 / 独立判定 (CS 1.5 的 pellets 机制)。
   // 旧实现只发一条射线, 所以 M3 打不出"一枪糊脸"的效果。
   const pellets = Math.max(1, wp.pellets | 0 || 1);
-  let anyEntity = false, anyHead = false, anyWall = null;
+  let anyEntity = false, anyHead = false, anyWall = null, bloodDone = false;
+  let farthest = null, farthestD = -1;
   for (let i = 0; i < pellets; i++) {
-    _dir.set(f[0], f[1], f[2]);
+    _dir.copy(_fwd)
+      .addScaledVector(_right, dirYaw)
+      .addScaledVector(_up, dirPitch);
     if (spread > 0) {
       _dir.addScaledVector(_right, rand(-spread, spread));
-      _dir.addScaledVector(up, rand(-spread, spread));
+      _dir.addScaledVector(_up, rand(-spread, spread));
     }
     _dir.normalize();
 
     const hit = rayHit(origin, _dir, A.BULLET_RANGE);
+    const hp = posOf(hit.point);
+    if (hp) {
+      const d = dist3([origin.x, origin.y, origin.z], hp);
+      if (d > farthestD) { farthestD = d; farthest = hp; }
+    }
     if (hit.kind === 'entity') {
       const e = hit.entity;
+      if (!bloodDone) {
+        bloodDone = true;
+        spawnBlood(hit.point, _dir);
+      }
       if (e.team === (S.playerTeam || 'ct')) {
         if (!anyEntity) showCenter('别打队友!', '#ff5050', 0.6);
         anyEntity = true;
@@ -802,7 +1185,7 @@ export function shoot() {
       const mult = A.HITBOX_MULT[zone] ?? 1;
       const travelled = dist3(p.pos, hit.point);
       const falloff = Math.max(0.4, 1 - travelled * (1 - (wp.range_mod ?? 0.98)) * 0.02);
-      const dmg = wp.dmg * mult * falloff;
+      const dmg = wp.dmg * mult * falloff * dmgScale;
       if (typeof e.takeDamage === 'function') {
         e.takeDamage(dmg, zone === 'head', S.player.pos, '你', zone);
       }
@@ -813,13 +1196,16 @@ export function shoot() {
     }
   }
 
+  // 每次开火只画一条曳光弹, 终点取本次所有弹丸的最远命中点
+  if (farthest) spawnTracer(origin, _fwd, _right, _up, farthest);
+
   if (anyEntity) {
     play(anyHead ? 'head' : 'hit');
     hitText(anyHead ? '爆头!' : '命中');
   } else if (anyWall) {
     addBulletHole(anyWall.point, anyWall.normal);
-    // 击中墙体: 溅射音 + 材质音
-    play(Math.random() < 0.5 ? 'ric1' : 'ric2');
+    const ric = wallRicochet(anyWall.point, anyWall.normal);
+    play(ric, anyWall.point);
   }
 }
 
@@ -980,13 +1366,43 @@ export function makeBotMesh(modelName, weaponName) {
       else m.color.setRGB(1, 1, 1);
     }
   };
+  let deathPlayed = false;
+  const playDeath = () => {
+    if (deathPlayed) return;
+    deathPlayed = true;
+    if (hpBar) hpBar.visible = false;
+    if (flash) flash.visible = false;
+    try {
+      const clips = animData && animData.clips;
+      const c = clips && (clips.death || clips.die || clips.dying);
+      if (c && Array.isArray(c.frames) && c.frames.length) {
+        const src = c.frames[c.frames.length - 1];
+        if (src) {
+          let off = 0;
+          for (let i = 0; i < animParts.length; i++) {
+            const attr = animParts[i].mesh.geometry.getAttribute("position");
+            const n = attr.count * 3;
+            if (off + n <= src.length) {
+              for (let k = 0; k < n; k++) attr.array[k] = src[off + k];
+              attr.needsUpdate = true;
+            }
+            off += n;
+          }
+          return;
+        }
+      }
+    } catch (_) { /* 动画数据异常时退回倒地姿态 */ }
+    group.rotation.x = -Math.PI / 2;
+    group.position.y -= 10;
+  };
+
   group.userData.hpBar = hpBar;
   group.userData.parts = parts;
   group.userData.gunParts = gunParts;
   group.userData.flash = flash;
   group.userData.setHitFlash = setHitFlash;
   botVisuals.add(group);
-  return { group, parts, gunParts, hpBar, flash, setHitFlash, updateAnim, hasAnim: !!animData };
+  return { group, parts, gunParts, hpBar, flash, setHitFlash, updateAnim, playDeath, hasAnim: !!animData };
 }
 
 export function addEntityMesh(mesh) {
@@ -1067,6 +1483,14 @@ export function initEngine(canvas) {
   vmWrapper.scale.set(1, 1, -1);
   vmRoot.add(vmWrapper);
 
+  // 主场景是 MeshBasicMaterial, 点光不会给世界着色; 仍保留随相机的动态光,
+  // 供后续换成受光材质时使用, 同时给 VM 场景一份同参数光源。
+  worldMuzzleLight = new THREE.PointLight(0xffc060, 0, 320, 2);
+  worldMuzzleLight.visible = true;
+  scene.add(worldMuzzleLight);
+  vmMuzzleLight = new THREE.PointLight(0xffc060, 0, 8, 2);
+  vmScene.add(vmMuzzleLight);
+
   calibrateCamera();
   // 主场景/天空场景共用同一个镜像投影: 世界左右与 VM 一致
   if (mirrorX) {
@@ -1076,17 +1500,23 @@ export function initEngine(canvas) {
   syncCamera();
   setFov(A.BASE_FOV);
   S.fov = A.BASE_FOV;
+  effectArrays();
   buildViewmodel(S.weapon || 'usp');
   S.hooks.switchWeapon = buildViewmodel;
   S.hooks.shoot = shoot;
-
-  window.addEventListener('resize', onResize);
   S.engine = Object.assign(S.engine || {}, {
     renderer, scene, camera, skyScene, skyCamera, vmScene, vmCamera,
     shoot, rayHit, buildViewmodel, addBulletHole,
     addEntityMesh, removeEntityMesh, makeBotMesh,
     getCamera, getScene, getVM,
+    toggleSilencer, toggleGlockMode, cycleSpectate, toggleFreeCam,
+    clearEffects, getEffects: () => effectArrays(),
   });
+  window.addEventListener('resize', onResize);
+  S.hooks.toggleSilencer = toggleSilencer;
+  S.hooks.toggleGlockMode = toggleGlockMode;
+  S.hooks.cycleSpectate = cycleSpectate;
+  S.hooks.toggleFreeCam = toggleFreeCam;
   return renderer;
 }
 
@@ -1095,22 +1525,30 @@ export function updateEngine(dt) {
   const d = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   engineTime += d;
   const p = S.player;
+  const frozen = !!S.round && S.round.phase === 'freeze';
+  const over = !!S.round && S.round.phase === 'over';
+  const sp = getSpectate();
 
-  // 鼠标视角。
+  // 鼠标视角。冻结时间允许原地转头, 但禁止移动/开火 (购买菜单仍可用)。
+  // 观战时鼠标转向由自由视角的 yaw 承担, 不改动玩家视角。
   //
   // 旧实现是 yaw += mouseDX * sensitivity * 0.02, sensitivity=40 -> 0.8 度/像素。
   // 那意味着横移 450 像素就转完 360 度, 鼠标稍微一动视角就飞掉。
   // 现在 sensitivity 改为"倍率"(默认 2.0), 每像素角度 = 0.06 * 倍率 = 0.12 度,
   // 与 CS 里 sensitivity 2~3 / 400~800 DPI 的手感接近 (约 3000 像素转一圈)。
-  if (!S.buyMenuOpen && !p.dead) {
-    const degPerPx = DEG_PER_COUNT * (Number.isFinite(p.sensitivity) ? p.sensitivity : DEFAULT_SENSITIVITY);
+  const degPerPx = DEG_PER_COUNT * (Number.isFinite(p.sensitivity) ? p.sensitivity : DEFAULT_SENSITIVITY);
+  if (!S.buyMenuOpen && p.dead && sp.free) {
+    sp.yaw = (Number(sp.yaw) || 0) + (S.mouseDX || 0) * degPerPx;
+  } else if (!S.buyMenuOpen && !p.dead) {
     p.yaw += (S.mouseDX || 0) * degPerPx;
     p.pitch = clamp(p.pitch + (S.mouseDY || 0) * degPerPx, -90, 90);
   }
   S.mouseDX = 0;
   S.mouseDY = 0;
 
-  if (!p.dead && !S.buyMenuOpen) updatePhysics(d);
+  // 冻结时间不调 updatePhysics; 自由观战走独立的相机飞行, 也不动玩家位置。
+  if (!frozen && !p.dead && !S.buyMenuOpen) updatePhysics(d);
+  else if (p.dead && sp.free) updateFreeCam(d);
 
   S.shootCd -= d;
   // 换弹进度: 驱动第一人称换弹动作 (0..1)。
@@ -1127,7 +1565,11 @@ export function updateEngine(dt) {
   }
   S.crossHeat = Math.max(0, S.crossHeat - d * 6);
   const wp = A.WEAPONS[S.weapon];
-  if (S.mouseDown && wp && wp.auto && !S.buyMenuOpen && !p.dead) shoot();
+  if (S.mouseDown && wp && wp.auto && !frozen && !over && !S.buyMenuOpen && !p.dead) {
+    if (!burstQueue && !burstLatch) shoot();
+  } else if (!S.mouseDown) {
+    burstLatch = false;
+  }
 
   if (S.weapon !== vmWeapon) buildViewmodel(S.weapon);
   const moving = held('w', 'W', 'KeyW', 'arrowup', 'ArrowUp')
@@ -1136,15 +1578,26 @@ export function updateEngine(dt) {
     || held('d', 'D', 'KeyD', 'arrowright', 'ArrowRight');
   updateVM(d, moving && !S.buyMenuOpen && !p.dead);
 
-  // AWP / 狙击两级变焦: 一级 40 度, 二级 15 度 (CS 1.5)。S.scopeLevel 由
-  // main.js 的 setScope() 维护, 0 表示不瞄。
-  const SCOPE_FOV_BY_LEVEL = [A.BASE_FOV, 40, 15];
-  const fov = SCOPE_FOV_BY_LEVEL[S.scopeLevel || 0] || A.BASE_FOV;
+  // 开镜 FOV 完全由武器表驱动: AWP/SG550/G3SG1 两级, Scout/AUG/SG552 一级。
+  const levels = (wp && Array.isArray(wp.zoomLevels)) ? wp.zoomLevels
+    : (ZOOM_FALLBACK[S.weapon] || (wp && wp.zoom ? [40] : []));
+  let level = Math.max(0, Math.floor(Number(S.scopeLevel) || 0));
+  if (level > levels.length) { level = 0; S.scopeLevel = 0; }
+  const fov = level > 0
+    ? (Number.isFinite(levels[level - 1]) ? levels[level - 1] : 40)
+    : (Number.isFinite(S.baseFov) ? S.baseFov : A.BASE_FOV);
   if (camera.fov !== fov) setFov(fov);
   S.fov = fov;
 
   updateHoles(d);
+  updateEffects(d);
+  updateMuzzleLight();
   syncCamera();
+  if (S.audio && typeof S.audio.updateListener === 'function' && camera) {
+    try {
+      S.audio.updateListener(camera.position, forwardVec(p.yaw, p.pitch));
+    } catch (_) { /* 音频后端未就绪时忽略 */ }
+  }
 }
 
 export function renderFrame() {

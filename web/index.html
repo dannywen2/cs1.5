@@ -32,6 +32,7 @@
   <div id="hud-top-center" class="panel">
     <div id="timer-text">1:45</div>
     <div id="objective-text">阻止 T 安放 C4</div>
+    <div id="phase-text"></div>
   </div>
 
   <div id="hud-bottom-center">
@@ -56,11 +57,18 @@
   </div>
 
   <div id="radio" class="toast hidden"></div>
-  <div id="killfeed" class="toast hidden"></div>
+  <div id="killfeed" class="toast hidden"><img id="kill-icon" alt=""><span id="killfeed-text"></span></div>
   <div id="hit-text" class="toast hidden"></div>
   <div id="center-text" class="toast hidden"></div>
   <div id="reload-text" class="toast hidden">换弹中...</div>
   <div id="spectate-text" class="toast hidden"></div>
+
+  <div id="freeze-text" class="toast hidden"></div>
+  <div id="c4-icon" class="toast hidden">C4 已携带  ·  前往包点按住 E 安放</div>
+  <div id="pickup-hint" class="toast hidden"></div>
+  <div id="plant-hint" class="toast hidden"></div>
+  <div id="plant-bar-bg" class="hidden"><div id="plant-bar"></div></div>
+  <div id="damage-dir" class="hidden"><div id="damage-arrow"></div></div>
 
   <div id="defuse-hint" class="toast hidden"></div>
   <div id="defuse-bar-bg" class="hidden"><div id="defuse-bar"></div></div>
@@ -102,6 +110,7 @@
 <div id="loading" class="overlay">
   <h1>CS 1.5 复刻版 - three.js</h1>
   <p class="sub">DE_DUST2  ·  爆破模式  ·  CT 防守</p>
+  <img id="load-thumb" alt="">
   <div id="bar-bg"><div id="bar"></div></div>
   <div id="load-label">正在加载原版资源...</div>
 </div>
@@ -115,10 +124,41 @@
     <div>1 / 2 / 3 主武器 / 手枪 / 匕首 &nbsp;·&nbsp; Q 上一把武器</div>
     <div>G HE 手雷 &nbsp;·&nbsp; F 闪光弹 &nbsp;·&nbsp; E 按住拆弹 &nbsp;·&nbsp; B 购买菜单</div>
     <div>Tab 计分板 &nbsp;·&nbsp; [ / ] 调鼠标灵敏度 &nbsp;·&nbsp; ESC 退出鼠标锁定</div>
-    <div class="help-dim">你是 CT：阻止 T 安放 C4，或按住 E 拆除已安放的 C4</div>
+    <div id="start-role" class="help-dim">你是 CT：阻止 T 安放 C4，或按住 E 拆除已安放的 C4</div>
+  </div>
+  <div id="start-thumb-wrap"><img id="start-thumb" alt="de_dust2 俯视图"></div>
+  <div id="start-settings">
+    <label>鼠标灵敏度 <input id="set-sens" type="range" min="0.2" max="8" step="0.1" value="2"><span id="set-sens-val">2.0</span></label>
+    <label>音量 <input id="set-volume" type="range" min="0" max="1" step="0.05" value="0.8"><span id="set-volume-val">80%</span></label>
+    <label>视野 FOV <input id="set-fov" type="range" min="70" max="110" step="1" value="90"><span id="set-fov-val">90</span></label>
+    <label>每队 Bot <select id="set-bots"><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></label>
+    <label>难度 <select id="set-diff"><option value="0.75">简单</option><option value="1" selected>普通</option><option value="1.35">困难</option></select></label>
+    <label>赛制 <select id="set-mr"><option value="9">MR9</option><option value="12">MR12</option><option value="15" selected>MR15</option></select></label>
+    <label>3D 定位音频 <input id="set-positional" type="checkbox" checked></label>
   </div>
   <button id="start-btn" type="button">点击进入战场</button>
   <p class="sub">点击后浏览器会锁定鼠标并启用音频</p>
+</div>
+
+<!-- 暂停菜单 -->
+<div id="pause" class="overlay hidden">
+  <h1>已暂停</h1>
+  <div class="menu-buttons">
+    <button id="pause-resume" type="button">返回战场</button>
+    <button id="pause-restart" type="button">重开比赛</button>
+    <button id="pause-menu" type="button">返回主菜单</button>
+  </div>
+  <p class="sub">ESC 可返回战场</p>
+</div>
+
+<!-- 比赛结束 -->
+<div id="match-over" class="overlay hidden">
+  <h1 id="mo-title">比赛结束</h1>
+  <div id="mo-score"></div>
+  <div class="menu-buttons">
+    <button id="mo-btn-ot" type="button">进入加时 (MR3)</button>
+    <button id="mo-btn-restart" type="button">重开比赛</button>
+  </div>
 </div>
 
 <div id="fatal" class="hidden"></div>

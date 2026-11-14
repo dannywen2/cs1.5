@@ -410,3 +410,180 @@ button { font: inherit; }
   overflow: auto;
   pointer-events: auto;
 }
+
+/* -------------------- 主菜单设置 / 交互控件 -------------------- */
+#start-settings, .menu-buttons, #start-btn, #pause button, #match-over button { pointer-events: auto; }
+#start-settings input, #start-settings select, #start-settings button { pointer-events: auto; }
+
+#start-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: .5em 1.5em;
+  margin: 1.2em 0;
+  padding: .9em 1.2em;
+  background: rgba(8, 18, 30, .55);
+  border: 1px solid rgba(140, 180, 230, .25);
+  border-radius: 6px;
+  font-size: .92em;
+  max-width: 760px;
+}
+#start-settings label {
+  display: flex;
+  align-items: center;
+  gap: .6em;
+  justify-content: space-between;
+  color: #dbe8f8;
+}
+#start-settings input[type=range] { flex: 1; min-width: 90px; accent-color: #ffd678; }
+#start-settings select {
+  background: #142338;
+  color: #e1eeff;
+  border: 1px solid rgba(140, 180, 230, .4);
+  padding: .15em .4em;
+  border-radius: 3px;
+}
+#start-settings input[type=checkbox] { accent-color: #ffd678; }
+#start-settings span[id$="-val"] { min-width: 3.5em; text-align: right; color: #ffd678; }
+
+/* -------------------- 俯视缩略图 -------------------- */
+#start-thumb-wrap {
+  max-width: 260px;
+  max-height: 150px;
+  margin: 0 auto;
+  border: 1px solid rgba(140, 180, 230, .35);
+  border-radius: 4px;
+  opacity: .85;
+}
+#start-thumb {
+  display: block;
+  max-width: 260px;
+  max-height: 150px;
+  border: 1px solid rgba(140, 180, 230, .35);
+  border-radius: 4px;
+  opacity: .85;
+  object-fit: cover;
+}
+#load-thumb {
+  display: block;
+  width: 200px;
+  max-width: 60vw;
+  max-height: 120px;
+  margin: 0 auto;
+  border-radius: 4px;
+  opacity: .7;
+  object-fit: cover;
+}
+
+/* -------------------- 菜单按钮 / 比赛结束 -------------------- */
+.menu-buttons {
+  display: flex;
+  gap: 1em;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 1.2em 0;
+}
+.menu-buttons button {
+  pointer-events: auto;
+  padding: clamp(10px, 1.2vh, 18px) clamp(28px, 3vw, 56px);
+  color: #06101c;
+  background: #ffd678;
+  border: none;
+  border-radius: 4px;
+  font-size: clamp(15px, 1.3vw, 22px);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(255, 214, 120, .28);
+}
+.menu-buttons button:hover { background: #ffeaa8; }
+#mo-score { font-size: 1.5em; color: #ffdc82; margin: .6em 0; }
+
+/* -------------------- 新增 HUD 提示 -------------------- */
+#freeze-text {
+  top: 34%; left: 50%; transform: translateX(-50%);
+  background: rgba(8, 18, 30, .72);
+  color: #b4d2ff;
+  font-size: clamp(20px, 2vw, 38px);
+  font-weight: 700;
+  letter-spacing: .08em;
+  min-width: 30vw;
+}
+#c4-icon {
+  top: 24%; left: 50%; transform: translateX(-50%);
+  background: rgba(60, 20, 16, .85);
+  color: #ffb45a;
+  font-weight: 700;
+}
+#pickup-hint {
+  top: 62%; left: 50%; transform: translateX(-50%);
+  background: rgba(10, 34, 18, .82);
+  color: #8ef0a0;
+  font-size: 1.15em;
+}
+#plant-hint {
+  top: 70%; left: 50%; transform: translateX(-50%);
+  background: rgba(38, 22, 8, .85);
+  color: #ffb45a;
+  font-size: 1.25em;
+  min-width: 30vw;
+}
+#plant-bar-bg {
+  position: absolute;
+  top: calc(70% + clamp(28px, 2.6vw, 46px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(200px, 22vw, 420px);
+  height: 10px;
+  background: rgba(18, 30, 42, .92);
+  border: 1px solid rgba(120, 160, 190, .35);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#plant-bar {
+  width: 0%; height: 100%;
+  background: #ffb45a;
+  transition: width .06s linear;
+}
+#damage-dir {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+  z-index: 9;
+}
+#damage-arrow {
+  position: absolute;
+  top: 18%; left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 14px solid transparent;
+  border-right: 14px solid transparent;
+  border-bottom: 26px solid rgba(255, 60, 50, .85);
+  filter: drop-shadow(0 0 6px rgba(255, 0, 0, .8));
+}
+#kill-icon {
+  width: 28px; height: 28px;
+  vertical-align: middle;
+  margin-right: .5em;
+  object-fit: contain;
+}
+#phase-text { font-size: .85em; color: #96a5b9; margin-top: .25em; }
+
+/* -------------------- 准星变体 -------------------- */
+#crosshair[data-ch="dot"] .line { display: none; }
+#crosshair[data-ch="dot"]::after { content:""; position:absolute; left:-2px; top:-2px; width:4px; height:4px; border-radius:50%; background:var(--cross); box-shadow:0 0 2px rgba(0,0,0,.9); }
+#crosshair[data-ch="t"] .ch-up, #crosshair[data-ch="t"] .ch-left, #crosshair[data-ch="t"] .ch-right { display:none; }
+#crosshair[data-ch="scope"] .line { display:none; }
+#crosshair[data-ch="scope"]::after { content:""; position:absolute; left:-1px; top:-8px; width:2px; height:16px; background:var(--cross); opacity:.8; }
+
+/* -------------------- 逐人计分板表格 -------------------- */
+.sb-table { width:100%; border-collapse:collapse; font-size:.92em; }
+.sb-table th { color:#ffdc82; border-bottom:1px solid rgba(140,180,230,.4); padding:.35em .5em; text-align:left; font-weight:600; }
+.sb-table td { color:#e1eeff; padding:.3em .5em; border-bottom:1px solid rgba(140,180,230,.12); text-align:left; }
+.sb-table td.num { text-align:right; }
+.sb-table tr.sb-me td { color:#78ff78; background:rgba(80,180,90,.12); }
+.sb-table tr.sb-dead td { opacity:.55; }
+.sb-table .sb-ct { color:#78beff; }
+.sb-table .sb-t { color:#ffa078; }
+.sb-score { color:#ffd678; margin-bottom:.7em; font-size:1.05em; }
+#sb-body { white-space: normal; }
+#scoreboard { width: clamp(420px, 56vw, 860px); }
