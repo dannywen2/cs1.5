@@ -32,70 +32,44 @@ OUT = os.path.join(BASE, 'assets', 'player')
 PLAYERS = ('leet', 'terror', 'guerilla', 'arctic',
            'sas', 'urban', 'gsg9', 'gign')
 CLIPS = ('walk', 'run')
+# GoldSrc 引擎里 walk/run 是 gait 序列, 引擎先把 ref_aim_*(持枪上身)
+# 摆好, 再用 gait 数据只覆盖"该序列有动画数据的骨骼"。walk 只带腿/脊柱
+# 数据, 手臂永远持枪; run 虽然带手臂数据, 但那是无枪摆臂的废数据,
+# 而且本项目的枪模是独立 mesh 固定在身上, 手臂摆开就会跟枪分离。
+ARM_BONE_HINTS = ('clavicle', 'upperarm', 'forearm', 'hand', 'finger',
+                  'wrist', 'elbow', 'bicep', 'shoulder', 'knuckle')
 
 
-def solve_upright_angle(cam_verts, ref_span_x):
-    """Yaw about CAMERA-Y making the camera-X span match the reference.
-
-    cam_verts are already in camera space (right/up/forward basis); camera-X is
-    the horizontal screen axis, so that is the span that must match. Solved ONCE
-    per clip — see the module docstring for why per-frame solving spins the body.
-    """
-    if not cam_verts:
-        return 0.0
-    cx = (max(p[0] for p in cam_verts) + min(p[0] for p in cam_verts)) / 2
-    cz = (max(p[2] for p in cam_verts) + min(p[2] for p in cam_verts)) / 2
-
-    def span_x(deg):
-        ca, sa = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-        lo, hi = 1e9, -1e9
-        for (x, _y, z) in cam_verts:
-            dx, dz = x - cx, z - cz
-            nx = cx + dx * ca + dz * sa
-            if nx < lo:
-                lo = nx
-            if nx > hi:
-                hi = nx
-        return hi - lo
-
-    best_deg, best_err = 0.0, abs(span_x(0.0) - ref_span_x)
-    for deg in range(-180, 181, 2):
-        err = abs(span_x(deg) - ref_span_x)
-        if err < best_err:
-            best_err, best_deg = err, float(deg)
-    for step in range(-4, 5):
-        deg = best_deg + step * 0.5
-        err = abs(span_x(deg) - ref_span_x)
-        if err < best_err:
-            best_err, best_deg = err, deg
-    return best_deg
-
-
-def rotate_cam_y(cam_verts, deg):
-    """Rotate camera-space vertices about camera-Y by a fixed angle."""
-    if not cam_verts or abs(deg) < 1e-6:
-        return cam_verts
-    cx = (max(p[0] for p in cam_verts) + min(p[0] for p in cam_verts)) / 2
-    cz = (max(p[2] for p in cam_verts) + min(p[2] for p in cam_verts)) / 2
-    ca, sa = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-    out = []
-    for (x, y, z) in cam_verts:
-        dx, dz = x - cx, z - cz
-        out.append((cx + dx * ca + dz * sa, y, cz - dx * sa + dz * ca))
+def arm_bone_set(m):
+    out = set()
+    for i, bn in enumerate(m.bones):
+        low = bn['name'].lower()
+        if any(h in low for h in ARM_BONE_HINTS):
+            out.add(i)
     return out
 
 
-def to_cam(pverts, right, up, fwd):
-    return [(bake_player._dot(p, right), bake_player._dot(p, up),
-             bake_player._dot(p, fwd)) for p in pverts]
+def covered_bones(m, seq):
+    """gait 序列带动画数据的骨骼集合 (六个通道 offset 不全为 0)"""
+    so = m.seq_index + seq * 176
+    animindex = struct.unpack_from('<i', m.raw, so + 124)[0]
+    return {bi for bi in range(m.num_bones)
+            if any(struct.unpack_from('<6H', m.raw, animindex + bi * 12))}
 
 
-def from_cam(cam_verts, right, up, fwd):
-    return [(c[0] * right[0] + c[1] * up[0] + c[2] * fwd[0],
-             c[0] * right[1] + c[1] * up[1] + c[2] * fwd[1],
-             c[0] * right[2] + c[1] * up[2] + c[2] * fwd[2])
-            for c in cam_verts]
+def merged_bone_values(m, base_vals, seq, frame, gait_bones, skip):
+    """原版引擎的 gait 合成: ref_aim 姿态打底, gait 只覆盖它有数据的骨骼.
 
+    跳过根骨 (Bip01 位置由实体坐标驱动, 动画里的位移会造成漂移) 和手臂
+    骨骼 (保持持枪)。返回每根骨骼的 6 值列表。
+    """
+    gv = m.bone_values(seq, frame, 0)
+    vals = [list(v) for v in base_vals]
+    for bi in gait_bones:
+        if bi == 0 or bi in skip:
+            continue
+        vals[bi] = gv[bi]
+    return vals
 
 
 def main():
@@ -123,15 +97,18 @@ def main():
         # 用 seq=0 会拿到 "dummy" 标定姿态 —— 那个姿态手臂是平举的, 用它做
         # 归一化参考会让动画的手臂比静态宽 2~3 倍 (就是"双臂展开")。
         ref_name = meta.get('pose') or 'ref_aim_c4'
+        ref_blend = meta.get('blend', 0)
         seqs_all = m.seq_names()
         ref_seq = seqs_all.index(ref_name) if ref_name in seqs_all else 0
-        ref_pverts = m.posed_verts(model, seq=ref_seq, frame=0)
-        ref_pverts = bake_player.align_head(m, model, ref_pverts, ref_seq, 0, right, up, fwd)
+        # gait 合成的打底姿态: 与静态网格完全相同的 ref_aim 帧
+        base_vals = m.bone_values(ref_seq, 0, ref_blend)
+        skip_bones = arm_bone_set(m)
+        ref_pverts = m.posed_verts(model, seq=ref_seq, frame=0, blend=ref_blend)
+        ref_pverts = bake_player.align_head(m, model, ref_pverts, ref_seq,
+                                            ref_blend, right, up, fwd)
         _ref_c = [(bake_player._dot(p, right),
                    bake_player._dot(p, up),
                    bake_player._dot(p, fwd)) for p in ref_pverts]
-        # 屏幕横向 = 相机 X 轴, 用它作为宽度基准 (模型 Y 是竖直方向, 不对)
-        ref_span_x = (max(p[0] for p in _ref_c) - min(p[0] for p in _ref_c))
         _lo = [min(p[i] for p in _ref_c) for i in range(3)]
         _hi = [max(p[i] for p in _ref_c) for i in range(3)]
         _s = 1.0 / (_hi[1] - _lo[1])
@@ -172,21 +149,23 @@ def main():
             # 差别, 但数据量降三分之一。保留末帧, 保证循环闭合。
             keep = max(2, int(round(nf * 20.0 / 30.0)))
             idxs = [int(round(i * (nf - 1) / (keep - 1))) for i in range(keep)]
-            # 身体朝向是整段 clip 的属性, 只解一次角 —— 逐帧求解会因为目标函数
-            # 在最优附近很平而在等价解间跳动 (实测相邻帧差 174 度), 走路时人
-            # 会原地打转。
-            _f0 = m.posed_verts(model, seq=si, frame=idxs[0])
-            _f0 = bake_player.align_head(m, model, _f0, ref_seq, 0, right, up, fwd)
-            clip_angle = solve_upright_angle(to_cam(_f0, right, up, fwd), ref_span_x)
+            # gait 合成后身体朝向由 ref_aim 打底天然正确 (根骨+手臂来自
+            # 静态姿态), 不再做任何朝向纠偏 —— 旧的"按跨度匹配解偏航角"
+            # 是为早期的全身 walk 数据设计的, 在合并数据上目标函数退化,
+            # 会解出 ±90~180 度的乱角把人转歪 (实测 walk 解出 -115 度,
+            # run 解出 +152 度)。
+            gait_bones = covered_bones(m, si)
             frames = []
             for f in idxs:
-                pv = m.posed_verts(model, seq=si, frame=f)
-                # 用静态参考序列(seq=0)算头部朝向, 不能用当前动画的 si ——
+                # gait 合成 (原版引擎语义): ref_aim 持枪上身打底, gait 只覆盖
+                # 腿/脊柱等有数据的骨骼; 根骨与手臂骨骼跳过。
+                vals = merged_bone_values(m, base_vals, si, f,
+                                          gait_bones, skip_bones)
+                pv = m.posed_verts_from(model, vals)
+                # 用静态参考序列算头部朝向, 不能用当前动画的 si ——
                 # 否则整个人体会按走路姿态的头向被旋转, 手臂会外展。
-                pv = bake_player.align_head(m, model, pv, ref_seq, 0, right, up, fwd)
-                # 相机空间绕 Y 轴纠偏 (单角), 再变换回模型空间
-                pv = from_cam(rotate_cam_y(to_cam(pv, right, up, fwd), clip_angle),
-                              right, up, fwd)
+                pv = bake_player.align_head(m, model, pv, ref_seq,
+                                            ref_blend, right, up, fwd)
                 flat, groups = expanded_with_groups(normalise(pv))
                 if group_counts is None:
                     group_counts = groups

@@ -206,8 +206,29 @@ class Mdl:
 
     def posed_matrices(self, seq=0, frame=0, blend=0):
         """某序列某帧每根骨骼的世界 3x4 矩阵 (列向量约定)"""
-        mats = [self._bone_matrix(v) for v in self.bone_values(seq, frame, blend)]
-        return self._parented(mats)
+        return self._parented([self._bone_matrix(v)
+                               for v in self.bone_values(seq, frame, blend)])
+
+    def posed_verts_from(self, model, vals):
+        """把调用方给定的骨骼值 (每根 6 个: 位移+欧拉角) 摆到顶点上.
+
+        供 gait 合成等高级用法: 先在别处算好每根骨骼的值 (例如
+        "ref_aim 上身 + walk 腿部" 的混合), 再统一摆姿。
+        """
+        if not self.bones or not model.vertbone or self.num_seq <= 0:
+            return model.verts
+        mats = self._parented([self._bone_matrix(v) for v in vals])
+        out = []
+        for v, bi in zip(model.verts, model.vertbone):
+            m = mats[bi] if bi < len(mats) else None
+            if m is None:
+                out.append(v)
+                continue
+            x, y, z = v
+            out.append((m[0][0] * x + m[0][1] * y + m[0][2] * z + m[0][3],
+                        m[1][0] * x + m[1][1] * y + m[1][2] * z + m[1][3],
+                        m[2][0] * x + m[2][1] * y + m[2][2] * z + m[2][3]))
+        return out
 
     def posed_verts(self, model, seq=0, frame=0, blend=0):
         """把某个动作序列某一帧的骨骼姿态应用到顶点上.
