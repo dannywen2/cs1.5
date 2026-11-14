@@ -337,6 +337,13 @@ class Bot {
     this.strafeDir = Math.random() < 0.5 ? -1 : 1;
     this.strafeTimer = 0;
     this.attackRange = A.BOT_RANGE;
+    // 手雷库存: 与玩家一致, HE 1 颗 / 闪光 2 颗 (CS 1.5 上限)
+    const nadeRoll = Math.random();
+    this.nades = {
+      he: nadeRoll < 0.75 ? 1 : 0,
+      flash: nadeRoll < 0.45 ? 2 : (nadeRoll < 0.75 ? 1 : 0),
+    };
+    this.nadeCd = rand(2, 6);
     this.flash = 0;
     this.stunTimer = 0;
     this.lastSafe = [this.pos[0], 0, this.pos[2]];
@@ -624,6 +631,57 @@ class Bot {
     return base + distPenalty + rand(0, 0.18);
   }
 
+  // 投掷手雷。返回 true 表示本帧已经丢了雷 (不再执行其它行动)。
+  // 只在"有敌人情报但打不到"时使用 —— 能直接开枪时扔雷是浪费。
+  tryGrenade() {
+    if (this.nadeCd > 0) return false;
+    if (!this.nades || (this.nades.he <= 0 && this.nades.flash <= 0)) return false;
+    if (S.BOMB.state === 'over') return false;
+
+    const kp = this.knownPos;
+    if (!kp || S.time - this.knownTime > 6) return false;
+    const d = Math.hypot(kp[0] - this.pos[0], kp[2] - this.pos[2]);
+    if (d < 180 || d > 900) return false;          // 太近会炸自己, 太远扔不到
+    if (this.hasLOS(kp)) return false;             // 能看见就直接开枪
+    // 别把雷丢到队友脚下
+    for (const ally of S.allies.concat(S.enemies)) {
+      if (!ally || !ally.enabled || ally === this || ally.team !== this.team) continue;
+      if (Math.hypot(ally.pos[0] - kp[0], ally.pos[2] - kp[2]) < 160) return false;
+    }
+
+    const kind = this.nades.he > 0 ? 'he' : 'flash';
+    this.nades[kind] -= 1;
+    this.nadeCd = rand(7, 14);
+
+    // 弹道: 固定飞行时间, 反解出需要的竖直初速度
+    const dx = kp[0] - this.pos[0], dz = kp[2] - this.pos[2];
+    const horiz = Math.hypot(dx, dz) || 1;
+    const flight = Math.min(1.6, Math.max(0.7, horiz / 550));
+    const vh = horiz / flight;
+    const dy = kp[1] - (this.pos[1] + A.EYE_HEIGHT);
+    // y(t) = vy*t - 0.5*g*t^2 = dy  =>  vy = (dy + 0.5*g*t^2) / t
+    const vy = (dy + 0.5 * A.GRAVITY * flight * flight) / flight;
+
+    const eye = [this.pos[0] + (dx / horiz) * 12,
+                 this.pos[1] + A.EYE_HEIGHT,
+                 this.pos[2] + (dz / horiz) * 12];
+    const vel = [(dx / horiz) * vh, vy, (dz / horiz) * vh];
+
+    // 落点预演: 按游戏内同样的积分 (重力 + 落地上限) 模拟一遍,
+    // 偏差超过投掷半径就不扔 —— 否则 7 颗雷只有 1 颗能命中。
+    const sim = simNadeLanding(eye, vel);
+    if (!sim || Math.hypot(sim[0] - kp[0], sim[2] - kp[2]) > 180) {
+      this.nades[kind] += 1;      // 撤销消耗
+      this.nadeCd = rand(3, 6);
+      return false;
+    }
+
+    spawnGrenade(kind, eye, vel, flight, this.team);
+    return true;
+  }
+
+
+
   combat(to, dist, ent, dt) {
     const len = Math.hypot(to[0], to[2]) || 1;
     const fx = to[0] / len, fz = to[2] / len;
@@ -830,6 +888,10 @@ class Bot {
       tgt = null;
       this.target = null;
     }
+    // 打不到但有情报 -> 试着手雷压制
+    this.nadeCd -= dt;
+    if (this.state !== 'combat' && this.tryGrenade()) { this.syncVisual(); return; }
+
     const canSee = tgt !== null && S.time - this.knownTime < 0.45;
     if (canSee) {
       if (this.state !== 'combat') this.state = 'combat';
@@ -1089,22 +1151,9 @@ function clearListMeshes(list) {
   list.length = 0;
 }
 
-export function throwNade(kind) {
-  if (kind !== 'he' && kind !== 'flash' && kind !== 'smoke') return;
-  if (S.buyMenuOpen || S.player.dead || S.BOMB.state === 'over') return;
-  if (!S.player.nades[kind] || S.player.nades[kind] <= 0) return;
-  S.player.nades[kind] -= 1;
-  callUI('updateEquip');
-  play('pin');
-
-  const p = S.player;
-  const yaw = p.yaw * DEG, pitch = p.pitch * DEG;
-  const fwd = [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
-  const cam = typeof getCamera === 'function' ? getCamera() : null;
-  const eye = cam ? [cam.position.x, cam.position.y, cam.position.z]
-    : [p.pos[0], p.pos[1] + A.EYE_HEIGHT, p.pos[2]];
-  const pos = [eye[0] + fwd[0] * 12, eye[1] + fwd[1] * 12, eye[2] + fwd[2] * 12];
-  // CS 1.5 三种手雷颜色: HE 军绿 / 闪光 银白 / 烟雾 深灰
+// 生成一枚手雷 (玩家与 bot 共用)。
+// pos 是出手点, vel 是初速度向量, fuse 是引信秒数。
+export function spawnGrenade(kind, pos, vel, fuse = 1.5, team = null) {
   const col = kind === 'he' ? 0x465a3c : (kind === 'flash' ? 0xc8c8cd : 0x50565c);
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(2, 8, 6),
@@ -1112,11 +1161,47 @@ export function throwNade(kind) {
   );
   mesh.position.set(pos[0], pos[1], pos[2]);
   addMesh(mesh);
-  S.grenades.push({
-    kind, mesh, pos,
-    vel: [fwd[0] * 750, fwd[1] * 750 + 90, fwd[2] * 750],
-    fuse: 1.5,
-  });
+  S.grenades.push({ kind, mesh, pos: [pos[0], pos[1], pos[2]],
+                    vel: [vel[0], vel[1], vel[2]], fuse, team });
+  play('pin');
+  return true;
+}
+
+// 预演手雷落点 (与 updateGrenades 的积分规则一致), 返回落点坐标。
+// bot 投掷前用它校验: 偏得太远就不扔, 避免无意义的浪费。
+function simNadeLanding(pos, vel) {
+  let x = pos[0], y = pos[1], z = pos[2];
+  let vx = vel[0], vy = vel[1], vz = vel[2];
+  const step = 1 / 30;
+  for (let i = 0; i < 90; i++) {          // 最多 3 秒
+    vy -= A.GRAVITY * step;
+    x += vx * step; y += vy * step; z += vz * step;
+    const c = A.cellOf([x, y, z]);
+    const g = A.surfaceAt(c[0], c[1], y);
+    if (g !== null && g !== undefined && y < g + 4) {
+      return [x, g + 4, z];
+    }
+  }
+  return null;
+}
+
+export function throwNade(kind) {
+  if (kind !== 'he' && kind !== 'flash' && kind !== 'smoke') return;
+  if (S.buyMenuOpen || S.player.dead || S.BOMB.state === 'over') return;
+  if (!S.player.nades[kind] || S.player.nades[kind] <= 0) return;
+  S.player.nades[kind] -= 1;
+  callUI('updateEquip');
+
+  const p = S.player;
+  const yaw = p.yaw * DEG, pitch = p.pitch * DEG;
+  const fwd = [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)]
+  const cam = typeof getCamera === 'function' ? getCamera() : null;
+  const eye = cam ? [cam.position.x, cam.position.y, cam.position.z]
+    : [p.pos[0], p.pos[1] + A.EYE_HEIGHT, p.pos[2]];
+  const pos = [eye[0] + fwd[0] * 12, eye[1] + fwd[1] * 12, eye[2] + fwd[2] * 12];
+  // CS 1.5 手雷配色: HE 橄榄绿 / 闪光 银白 / 烟雾 灰蓝
+  spawnGrenade(kind, pos, [fwd[0] * 750, fwd[1] * 750 + 90, fwd[2] * 750], 1.5,
+    S.playerTeam || 'ct');
 }
 
 // 烟雾弹: 一团会膨胀并逐渐消散的烟球 (CS 1.5 的 smokescreen 是纯视觉遮挡)
@@ -1175,7 +1260,7 @@ function explodeNade(g) {
       if (!bot.enabled || bot.health <= 0) continue;
       // CS 1.5 默认 mp_friendlyfire 0: 自己的雷不伤队友。子弹路径同样跳过
       // team 'ct' (engine.js); 这里之前漏了, 往队友脚下扔一颗就能刷分刷钱。
-      if (bot.team === (S.playerTeam || 'ct')) continue;
+      if (g.team && bot.team === g.team) continue;
       const t = obj3([bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       const d = dist3(pos, [bot.pos[0], bot.pos[1] + A.EYE_HEIGHT, bot.pos[2]]);
       if (d >= radius || !A.gridClear(eye, t, 8)) continue;
