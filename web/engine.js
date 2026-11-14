@@ -695,6 +695,9 @@ export function shoot() {
   S.crossHeat = Math.min(S.crossHeat + 1, 3);
   play(wp.sfx || 'fire_ak47');
   reportPlayer(S.player.pos);
+  // 玩家枪声也广播出去: 敌方 T 会循声包抄, 己方 CT 会来支援
+  if (typeof A.notifyGunfirePlayer === 'function') A.notifyGunfirePlayer();
+  else if (S.hooks && typeof S.hooks.notifyGunfire === 'function') S.hooks.notifyGunfire();
 
   if (muzzle) {
     muzzle.visible = true;

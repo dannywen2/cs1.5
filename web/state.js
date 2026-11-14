@@ -112,6 +112,7 @@ export const S = {
   radarSpotted: Object.create(null),   // name -> 到期时间戳(秒)
   botKnownPos: null,         // [x,y,z] | null
   botKnownTime: -99,
+  gunfireEvents: [],          // 1.5 秒内的枪声: {x,y,z,team,t,loud}
   lastRadioAt: -99,
   serial: 0,
   usedBotSpawns: new Set(),
@@ -204,6 +205,33 @@ export function reportPlayer(pos) {
   S.botKnownPos = [pos[0], pos[1], pos[2]];
   S.botKnownTime = S.time;
 }
+// 枪声事件缓冲: bot 与玩家开火都会写入, CT 防守方据此判断该往哪边轮转。
+// CS 1.5 里枪声是最主要的情报来源, 而此前完全没有传播 —— 实测 T 打 B 点时,
+// 守 A 的 CT 会整局不动。
+export function notifyGunfire(pos, team, loud = 1) {
+  if (!pos) return;
+  if (!S.gunfireEvents) S.gunfireEvents = [];
+  S.gunfireEvents.push({ x: pos[0], y: pos[1], z: pos[2], team, t: S.time, loud });
+  // 只保留最近 1.5 秒的噪声源, 避免无限增长
+  while (S.gunfireEvents.length > 24) S.gunfireEvents.shift();
+  const cut = S.time - 1.5;
+  while (S.gunfireEvents.length && S.gunfireEvents[0].t < cut) S.gunfireEvents.shift();
+}
+
+// 取最近一段时间内、距离 p 最近且足够响的枪声位置
+export function heardGunfire(p, maxDist) {
+  const evs = S.gunfireEvents || [];
+  let best = null, bestD = Infinity;
+  for (const e of evs) {
+    if (S.time - e.t > 1.5) continue;
+    const d = Math.hypot(e.x - p[0], e.z - p[2]);
+    const range = maxDist * e.loud;
+    if (d > range) continue;
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  return best ? { pos: [best.x, best.y, best.z], dist: bestD, team: best.team } : null;
+}
+
 export function radioContact(spotted, reporter) {
   const d = Math.round(dist3(spotted.pos, reporter.pos));
   S.radarSpotted[spotted.name] = S.time + 9;

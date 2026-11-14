@@ -1591,14 +1591,25 @@ function deriveSpawns(meta) {
     const [cx, cy] = cellOf(gsx, gsy);
     const ls = layers(cx, cy);
     if (ls.length) {
-      const layerY = surfaceAt(cx, cy, gsz - 36) ?? gsz;
+      // 选层: 用实体高度就近选, 但若实体高度比顶层低出一个身位以上, 说明
+      // .ent 里的高度不是地面。实测 CT 出生点 gsz=-88 而地面是 +96, 结果全体
+      // CT 被放到 -128 的地下 nav 层, A* 从地下规划: 到 A 绕路 2.55 倍、
+      // 到 B 绕路 3.74 倍 (T 侧正常, 1.35 倍)。
+      const top = ls[ls.length - 1];
+      const byNear = surfaceAt(cx, cy, gsz - 36) ?? gsz;
+      const layerY = (byNear != null && Math.abs(top - byNear) > 72) ? top : byNear;
       const p = settleSpawn(gsx, layerY + 1, gsy, cx, cy, layerY);
       if (p[0] !== gsx || p[2] !== gsy) settled++;
       out.push(p);
     } else {
       const [nx, ny] = nearestOpen(cx, cy);
       const nls = layers(nx, ny);
-      const layerY = nls.length ? (surfaceAt(nx, ny, gsz - 36) ?? gsz) : gsz;
+      let layerY = gsz;
+      if (nls.length) {
+        const top2 = nls[nls.length - 1];
+        const byNear2 = surfaceAt(nx, ny, gsz - 36) ?? gsz;
+        layerY = (byNear2 != null && Math.abs(top2 - byNear2) > 72) ? top2 : byNear2;
+      }
       // 孤岛出生点收进最近可站立格 (留出玩家半宽)
       const bx = Math.min(Math.max(gsx, NAV_WX0 + nx * CELL + PLAYER_HALF),
         NAV_WX0 + (nx + 1) * CELL - PLAYER_HALF);

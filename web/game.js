@@ -2,7 +2,8 @@
 // 逻辑坐标与 state.js 一致: x 右 / y 上 / z 前, yaw=0 朝 +z。
 import * as THREE from './vendor/three.module.js';
 import * as A from './asset.js';
-import { S, clamp, rand, randInt, choice, dist2, dist3, yawTo, fmtTime, play, showCenter, reportPlayer, radioContact, addKill, giveAmmo, hitText } from './state.js';
+import { S, clamp, rand, randInt, choice, dist2, dist3, yawTo, fmtTime, play, showCenter, reportPlayer, radioContact, addKill, giveAmmo, hitText,
+  notifyGunfire, heardGunfire } from './state.js';
 import { makeBotMesh, addEntityMesh, removeEntityMesh, getCamera } from './engine.js';
 
 const DEG = Math.PI / 180;
@@ -661,6 +662,11 @@ class Bot {
     this.fireTimer = this.reactionDelay(dist);
     const wstat = A.WEAPONS[this.weaponId] || A.WEAPONS.ak47;
     play(wstat.sfx || 'fire_ak47');
+    // 枪声广播: 消音武器 (带 _sil) 传得更近
+    {
+      const silenced = /_sil$/.test(wstat.sfx || '');
+      notifyGunfire(this.pos, this.team, silenced ? 0.35 : 1);
+    }
     if (this.visual.flash) {
       this.visual.flash.visible = true;
       this.visual.flash.rotation.z = rand(0, Math.PI / 2);
@@ -782,6 +788,36 @@ class Bot {
     if (this.scanTimer <= 0) {
       this.scanTimer = 0.15;
       this.target = this.pickTarget();
+      // 没看到人但听到交火 -> 去支援。
+      // 之前没有任何声音传播, 实测 T 打 B 点时守 A 的 CT 会整局不动。
+      // 下包后 CT 必须直奔炸弹, 而不是 hunt 最后已知位置。
+      // 实测: B 点下包后 CT 4 人全部 hunt, 70 秒仍离炸弹 1200+ 单位。
+      if (!this.target && this.team === 'ct' && S.BOMB.state === 'planted'
+          && S.BOMB.pos && this.state !== 'combat') {
+        if (this.state !== 'move') {
+          this.state = 'move';
+          this.repath();
+        }
+      }
+      if (!this.target && this.state !== 'combat') {
+        this.rotateTimer = (this.rotateTimer || 0) - 0.15;
+        if (this.rotateTimer <= 0) {
+          // A 点到 B 点约 2700 单位, 听觉半径必须覆盖整张地图, 否则
+          // 守 A 的 CT 永远听不到 B 点的交火 (实测 2000 半径时零反应)。
+          const heard = heardGunfire(this.pos, 3600);
+          if (heard && heard.team !== this.team) {
+            this.knownPos = [heard.pos[0], heard.pos[1], heard.pos[2]];
+            this.knownTime = S.time;
+            this.rotateTimer = 4.5;      // 冷却, 避免在两点之间来回摆
+            this.state = 'hunt';
+            this.repath();
+            if (this.team === 'ct' && S.time - (S.lastRadioAt || -99) > 6) {
+              S.lastRadioAt = S.time;
+              play('radio');
+            }
+          }
+        }
+      }
       if (this.target) {
         this.knownPos = copy3(this.target.pos);
         this.knownTime = S.time;
@@ -808,7 +844,12 @@ class Bot {
       this.combat(to, tgt.d, tgt.ent, dt);
     } else if (this.state === 'hunt') {
       if (!this.knownPos || S.time - this.knownTime > 12) {
-        this.state = this.role === 'defend' ? 'move' : 'pause';
+        // 下包后即使情报过期也要继续走向炸弹, 不能退回自己的 post。
+        // 旧逻辑下 CT 走到半路情报过期 -> move -> repath 回原 post -> 循环,
+        // 实测 B 点下包 70 秒后 CT 仍离炸弹 889 单位。
+        const toBomb = (this.team === 'ct' && S.BOMB.state === 'planted' && S.BOMB.pos);
+        this.state = (this.role === 'defend' && !toBomb) ? 'move' : (toBomb ? 'move' : 'pause');
+        if (toBomb) { this.knownPos = null; this.knownTime = -99; }
         this.holdTimer = 1;
         this.repath();
       } else if (this.repathTimer <= 0) {
@@ -823,7 +864,10 @@ class Bot {
       this.facePath(this.knownPos || S.player.pos);
     } else if (this.state === 'move') {
       if (this.followPath(dt, 1)) {
-        if (this.role === 'defend') this.state = 'hold';
+        // 炸弹已安放时不能停在 post 上守着 —— 必须继续去拆包
+        const defusing = (this.team === 'ct' && S.BOMB.state === 'planted');
+        if (defusing) { this.repath(); }
+        else if (this.role === 'defend') this.state = 'hold';
         else { this.state = 'pause'; this.holdTimer = rand(1.5, 3.5); }
       }
       this.facePath();
@@ -1834,6 +1878,11 @@ export function initGame() {
   registerHook('dropC4', dropC4);
   registerHook('explodeC4', explodeC4);
   registerHook('switchWeapon', switchWeapon);
+  registerHook('notifyGunfire', () => {
+    const wp = A.WEAPONS[S.weapon] || {};
+    const silenced = /_sil$/.test(wp.sfx || '');
+    notifyGunfire(S.player.pos, S.playerTeam || 'ct', silenced ? 0.35 : 1);
+  });
   registerHook('reload', reloadWeapon);
   registerHook('buy', buyItem);
   registerHook('throwNade', throwNade);
