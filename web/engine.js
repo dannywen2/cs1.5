@@ -541,11 +541,21 @@ function syncCamera() {
 
   // 蹲起眼高平滑过渡 (原版蹲下有 ~0.3s 的过渡动画, 不是瞬切):
   // 指数逼近目标眼高, 起身时相机缓缓抬回, 不再"砰"地一下跳起。
+  // 顺带缓冲上台阶: 物理位置精确抬高 ≤18 单位, 相机用短平滑跟随,
+  // 走楼梯变成"轻微下沉-回弹"的节奏而不是逐级顿挫。
   {
     const want = p.crouching ? CROUCH_EYE : A.EYE_HEIGHT;
     if (!Number.isFinite(p.eyeSmooth)) p.eyeSmooth = want;
     p.eyeSmooth += (want - p.eyeSmooth) * Math.min(1, dtSyncCam * 10);
-    camera.position.set(p.pos[0], p.pos[1] + p.eyeSmooth, p.pos[2]);
+    // 相机 y 对物理 y 突变 (台阶) 做快速平滑: 大跳变以 ~15/s 速率追赶,
+    // 18 单位的台阶约 0.1s 走完, 既消除顿挫又不产生明显滞后。
+    if (!Number.isFinite(p.camYSmooth)) p.camYSmooth = p.pos[1];
+    const dy = p.pos[1] - p.camYSmooth;
+    p.camYSmooth = Math.abs(dy) < 1 ? p.pos[1]
+      : p.camYSmooth + dy * Math.min(1, dtSyncCam * 15);
+    // 重生/掉出世界后 y 差异大, 直接硬切避免相机飞过整个地图
+    if (Math.abs(dy) > 200) p.camYSmooth = p.pos[1];
+    camera.position.set(p.pos[0], p.camYSmooth + p.eyeSmooth, p.pos[2]);
   }
   camera.rotation.set(p.pitch * DEG * pitchSign, p.yaw * DEG * yawSign + yawOffset, 0, 'YXZ');
   camera.updateMatrixWorld();
