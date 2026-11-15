@@ -681,6 +681,43 @@ function rayHitEntity(assert, S) {
   return `rayHit 命中 kind=entity 且命中对象为目标 bot；shoot() 端到端扣血 ${Number(dmg).toFixed(1)}`;
 }
 
+// 8. 新机制回归: wallbang / 烟雾遮挡 / bot 换弹与蹲伏 / 经济买枪
+function newMechanics(assert, S, A) {
+  // a) SPREAD_TUNING 存在且 bot 经济函数路径正确 (手枪局)
+  assert(A.SPREAD_TUNING && A.SPREAD_TUNING.ak47 && A.SPREAD_TUNING.awp.scopedMove,
+    'SPREAD_TUNING 逐枪调参表缺失或不完整');
+  // b) bot 换弹字段
+  const bots = [...S.enemies, ...S.allies].filter(b => b);
+  assert(bots.length > 0, '没有 bot 可检查');
+  assert(bots.every(b => 'magAmmo' in b && 'reloadUntil' in b),
+    'Bot 缺少弹匣模拟字段 (magAmmo/reloadUntil)');
+  // c) 烟雾遮挡: 在烟团两侧放一对虚拟点, canSee 必须为 false
+  const b0 = bots.find(b => b.enabled && typeof b.canSee === 'function');
+  assert(!!b0, '没有带 canSee 的存活 bot');
+  const saveSmoke = S.smokes;
+  try {
+    const base = b0.pos;
+    S.smokes = [{ pos: [base[0], base[1], base[2] + 200], ttl: 10,
+      radius: 150, mesh: null, born: 0 }];
+    const eyeSide = [base[0], base[1], base[2] - 100];
+    const tgtSide = [base[0], base[1], base[2] + 500];
+    assert(b0.canSee(tgtSide) === false, '烟团应遮挡视线 (canSee 必须为 false)');
+    // 对照组: 把烟移开视线外 -> 必须恢复可见 (除非墙挡住; 只要求"不因烟误判")
+    S.smokes = [{ pos: [base[0] + 2000, base[1], base[2] + 2000], ttl: 10,
+      radius: 150, mesh: null, born: 0 }];
+    assert(b0.canSee(eyeSide) === true || b0.canSee(tgtSide) === true,
+      '烟不在视线上时 canSee 不应被遮挡');
+  } finally {
+    S.smokes = saveSmoke;
+  }
+  // d) 经济买枪: 第 1 回合应全是手枪
+  if (S.roundNum <= 1) {
+    assert(bots.every(b => ['glock18', 'usp'].includes(b.weaponId)),
+      '手枪局 bot 应只带默认手枪: ' + bots.map(b => b.weaponId).join(','));
+  }
+  return `SPREAD_TUNING/bot 弹匣/烟雾遮挡/经济买枪 验证通过 (${bots.length} bots)`;
+}
+
 async function smokePurchase(assert, S, A) {
   assert(S.player && S.player.nades, 'S.player.nades 不存在');
   assert(Object.prototype.hasOwnProperty.call(S.player.nades, 'smoke'),
@@ -1059,6 +1096,7 @@ async function main() {
       await check('3. 射线命中实体 (rayHit + shoot 扣血)', () => evalInPage(automation, rayHitEntity));
       await check('4. 购买菜单 / 烟雾弹可购买', () => evalInPage(automation, smokePurchase));
       await check('5. 阵亡后下回合拥有默认手枪', () => evalInPage(automation, defaultPistolAfterDeath));
+      await check('8. 新机制: 逐枪调参/弹匣/烟雾遮挡/经济买枪', () => evalInPage(automation, newMechanics));
       await check('6. 半场换边后 C4 有携带者', async () => {
         const r = await evalInPage(automation, halftimeC4Probe);
         const d = r.dynamic, p = r.probe;

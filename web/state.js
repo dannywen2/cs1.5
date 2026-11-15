@@ -290,9 +290,10 @@ export function giveAmmo(wid) {
   const w = WEAPONS[wid];
   if (w && w.clip_size != null) S.ammo[wid] = [w.clip_size, w.reserve];
 }
-export function hitText(msg, dur = 0.08) {
+export function hitText(msg, dur = 0.08, color = null) {
   S.hitMarker = msg;
   S.hitMarkerUntil = S.time + dur;
+  S.hitMarkerColor = color;
   S.hooks.hitText(msg, dur);
 }
 

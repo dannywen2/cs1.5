@@ -911,7 +911,10 @@ function updateHUD() {
   show(D.killfeed, !!killMsg && now < killUntil);
   const hm = S.hitMarker || '';
   show(D.hitText, !!hm && now < (S.hitMarkerUntil || 0));
-  if (hm) setText(D.hitText, hm);
+  if (hm) {
+    setText(D.hitText, hm);
+    setColor(D.hitText, S.hitMarkerColor || '#ffffff');
+  }
   show(D.reloadText, !!S.reloading);
   show(D.spectateText, !!spectateMsg && !!p.dead);
 

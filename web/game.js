@@ -151,6 +151,19 @@ function segIntersectsSphere(a, b, c, r) {
   return dx * dx + dy * dy + dz * dz < r * r;
 }
 
+// bot 经济买枪: 用队伍连败数近似"该队虚拟资金" (与玩家的 lossStreak 节奏
+// 同步): 无连败 = 富 (步枪/AWP 可选), 连败 2+ = eco (手枪/SMG/便宜霰弹)。
+// 第 1 回合永远是手枪局。返回武器 id。
+function botPickWeapon(team, roundNum) {
+  if (roundNum <= 1) return team === 't' ? 'glock18' : 'usp';
+  const loss = (S.lossStreak || 0) + (team === (S.playerTeam || 'ct') ? 0 : 1);
+  // 拆分资金档: 0 连败 $4000+, 1 连败 $2700, 2+ 连败 $1400 (近似)
+  const budget = [4000, 2700, 1400][Math.min(loss, 2)];
+  const pool = (A.BOT_ARSENAL && A.BOT_ARSENAL[team]) || ['usp'];
+  const afford = pool.filter(id => (A.WEAPONS[id] || {}).price <= budget);
+  return afford.length ? choice(afford) : (team === 't' ? 'glock18' : 'usp');
+}
+
 function nearestLayerIndex(ls, y) {
   if (!ls || !ls.length) return 0;
   let bi = 0, bd = Infinity;
@@ -403,9 +416,11 @@ class Bot {
     this.yaw = 0;              // 度, 与 state.js / yawTo 一致
     this.muzzleUntil = 0;
 
-    // bot 的枪: 从本方军火库随机取一把, 与其手持模型/枪声/伤害保持一致
-    const arsenal = (A.BOT_ARSENAL && A.BOT_ARSENAL[team]) || ['usp'];
-    this.weaponId = choice(arsenal);
+    // bot 的枪: 经济模拟 —— bot 用"队伍虚拟资金"买枪: 连败 (S.lossStreak
+    // 方向按队伍) 或回合数少时集体 eco (手枪/SMG), 有钱才起步枪/AWP。
+    // 与其手持模型/枪声/伤害保持一致。
+    this.weaponId = botPickWeapon(team, S.roundNum);
+    this.ecoBuy = (A.WEAPONS[this.weaponId] || {}).price <= 1500;
     this.pickupDrop = null;         // 顺路去捡的掉落武器 (findDropUpgrade 产出)
     this.visual = createVisual(team, this.weaponId);
     addMesh(this.visual.group);
@@ -1068,7 +1083,10 @@ class Bot {
     notifyKill(killer, this.name, headshot);
     if (killer === '你') {
       const wp = A.WEAPONS[S.weapon];
-      S.money = Math.min(MONEY_CAP, S.money + (wp ? (wp.kill_reward || 0) : 0));
+      const rw = wp ? (wp.kill_reward || 0) : 0;
+      S.money = Math.min(MONEY_CAP, S.money + rw);
+      // 击杀奖励飘字 (原版 +$ 提示)
+      if (rw > 0) hitText(`+$${rw}`, 1.2, '#ffd94a');
     } else if (typeof killer === 'string'
       && killer.startsWith((S.playerTeam || 'ct').toUpperCase())) {
       // 队友击杀: 原版给存活玩家 $150 协同奖励 (CS 1.5 team_kill_bonus)
