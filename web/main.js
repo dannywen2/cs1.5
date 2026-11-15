@@ -330,13 +330,15 @@ function buyItemLabel(id) {
   const w = A.WEAPONS[id];
   if (w) return w.name;
   return { armor: '凯夫拉护甲', kevlarhelm: '护甲 + 头盔', kit: '拆弹钳',
-    he: 'HE 手雷', flash: '闪光弹', smoke: '烟雾弹', ammo: '补满弹药' }[id] || id;
+    he: 'HE 手雷', flash: '闪光弹', smoke: '烟雾弹',
+    ammo1: '主武器弹药', ammo2: '手枪弹药' }[id] || id;
 }
 
 function buyItemPrice(id) {
   const w = A.WEAPONS[id];
   if (w) return w.price;
-  return { armor: 650, kevlarhelm: 1000, kit: 200, he: 300, flash: 200, smoke: 300, ammo: 300 }[id] ?? 0;
+  return { armor: 650, kevlarhelm: 1000, kit: 200, he: 300, flash: 200, smoke: 300,
+           ammo1: 180, ammo2: 50 }[id] ?? 0;
 }
 
 function buildBuyMenu() {

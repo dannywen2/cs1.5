@@ -39,7 +39,7 @@ export const BUY_CATEGORIES = [
     key: 'heavy', label: '机枪', ids: ['m249'],
   },
   {
-    key: 'gear', label: '装备', ids: ['armor', 'kevlarhelm', 'kit', 'he', 'flash', 'smoke', 'ammo'],
+    key: 'gear', label: '装备', ids: ['armor', 'kevlarhelm', 'kit', 'he', 'flash', 'smoke', 'ammo1', 'ammo2'],
   },
 ];
 const RELOAD_TIME = 1.6;
@@ -904,8 +904,12 @@ class Bot {
       if (this.health < this.maxHealth * 0.5 || Math.random() < 0.5) {
         this.strafeDir *= -1;
       }
-      // 蹲下交战 (原版 bot 远距离对枪会蹲: 命中率↑ 被命中率↓):
-      // 只在远距离站定时蹲, 蹲 0.8~1.6s 后起身继续走位。
+    }
+    // 距离控制: 远压近拉; 残血时优先脱离
+    const hurt = this.health < this.maxHealth * 0.35;
+    // 蹲下交战 (原版 bot 远距离对枪会蹲: 命中率↑ 被命中率↓):
+    // 只在远距离、非残血、非霰弹时蹲, 蹲 0.8~1.6s 后起身继续走位。
+    if (this.strafeTimer <= 0) {
       const kind = (A.WEAPONS[this.weaponId] || {}).kind || 'rifle';
       const crouchOk = dist > 350 && kind !== 'shotgun' && !hurt;
       this.crouching = crouchOk && Math.random() < 0.35;
@@ -918,8 +922,6 @@ class Bot {
         fx * this.strafeDir * this.speed * 0.5 * dt);
     }
 
-    // 距离控制: 远压近拉; 残血时优先脱离
-    const hurt = this.health < this.maxHealth * 0.35;
     if (dist > 420) {
       this.moveAxis(fx * this.speed * 0.55 * dt, fz * this.speed * 0.55 * dt);
     } else if (dist < 120 || hurt) {
@@ -1022,9 +1024,12 @@ class Bot {
       S.money = Math.min(MONEY_CAP, S.money + (wp ? (wp.kill_reward || 0) : 0));
     } else if (typeof killer === 'string'
       && killer.startsWith((S.playerTeam || 'ct').toUpperCase())) {
+      // 队友击杀: 原版给存活玩家 $150 协同奖励 (CS 1.5 team_kill_bonus)
       S.allyKills += 1;
+      S.money = Math.min(MONEY_CAP, S.money + 150);
     }
     spawnDebris(this.pos, 6);
+    spawnBloodPool(this.pos);
     if (this.weaponId && this.weaponId !== 'knife' && A.WEAPONS[this.weaponId]) {
       spawnWeaponDrop(this.pos, this.weaponId);
     }
@@ -1428,6 +1433,7 @@ export function spawnAlly() {
 
 export function clearBots() {
   for (const g of corpses.splice(0)) dropMesh(g);
+  clearBloodPools();
   for (const bot of S.enemies.concat(S.allies)) {
     if (bot && bot.visual) dropMesh(bot.visual.group);
     if (bot) bot.enabled = false;
@@ -1448,6 +1454,26 @@ function spawnDebris(pos, count) {
     const mesh = makeBox([rand(3, 6), rand(3, 6), rand(3, 6)], 0x965a3c, p);
     S.debris.push({ mesh, pos: copy3(p), vel: [rand(-140, 140), rand(90, 240), rand(-140, 140)], ttl: 1.4 });
   }
+}
+
+// 尸体血泊: 暗红圆面贴地 (原版死亡留血渍, 是判断"这里死过人"的信息源)。
+// 贴在死亡点的地面层上, 留到回合结束随尸体统一释放。
+const bloodPools = [];
+function spawnBloodPool(pos) {
+  const [cx, cz] = A.cellOf(pos);
+  const gy = A.surfaceAt(cx, cz, pos[1] + 4);
+  if (gy === null || gy === undefined) return;
+  const mesh = new THREE.Mesh(
+    new THREE.CircleGeometry(rand(16, 24), 12),
+    new THREE.MeshBasicMaterial({ color: 0x5a0f0f, transparent: false, side: THREE.DoubleSide }),
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(pos[0] + rand(-4, 4), gy + 0.3, pos[2] + rand(-4, 4));
+  addMesh(mesh);
+  bloodPools.push(mesh);
+}
+function clearBloodPools() {
+  for (const m of bloodPools.splice(0)) dropMesh(m);
 }
 
 function updateDebris(dt) {
@@ -2472,7 +2498,18 @@ function priceOf(id) {
   if (id === 'he') return 300;
   if (id === 'flash') return 200;
   if (id === 'smoke') return 300;
-  if (id === 'ammo' || id === 'refill' || id === 'ammo_refill') return 300;
+  // 弹药: 原版主武器弹 60/颗 * 弹匣, 副武器 50/颗 * 弹匣 (按整匣卖)
+  if (id === 'ammo1') return 60 * Math.max(1, Math.floor((A.WEAPONS[primaryWid()] || {}).clip_size || 30) / 10);
+  if (id === 'ammo2') return 50;
+  return null;
+}
+
+// 当前主武器 id (弹药购买用); 无主武器时返回 null
+function primaryWid() {
+  for (const wid of Object.keys(S.owned)) {
+    const w = A.WEAPONS[wid];
+    if (w && w.slot === 1) return wid;
+  }
   return null;
 }
 
@@ -2502,6 +2539,18 @@ export function buyItem(id) {
     || (id === 'kevlarhelm' && S.player.armor >= 100 && S.player.hasHelmet)
     || (id === 'kit' && S.player.hasKit)
     || ((id === 'he' || id === 'flash' || id === 'smoke') && S.player.nades[id] >= NADE_LIMIT[id])) return false;
+  // 弹药: 没有对应槽位武器时不可买
+  if (id === 'ammo1' && !primaryWid()) {
+    hitText('没有主武器', 0.8);
+    return false;
+  }
+  if (id === 'ammo2') {
+    const side = Object.keys(S.owned).find(w2 => (A.WEAPONS[w2] || {}).slot === 2);
+    if (!side) {
+      hitText('没有手枪', 0.8);
+      return false;
+    }
+  }
   if (S.money < price) {
     hitText('资金不足', 0.8);
     return false;
@@ -2528,8 +2577,11 @@ export function buyItem(id) {
     S.player.hasKit = true;
   } else if (id === 'he' || id === 'flash' || id === 'smoke') {
     S.player.nades[id] = (S.player.nades[id] || 0) + 1;
-  } else {
-    for (const wid of Object.keys(S.owned)) giveAmmo(wid);
+  } else if (id === 'ammo1') {
+    giveAmmo(primaryWid());
+  } else if (id === 'ammo2') {
+    const side = Object.keys(S.owned).find(w2 => (A.WEAPONS[w2] || {}).slot === 2);
+    if (side) giveAmmo(side);
   }
   updateEquipText();
   callUI('updateAmmo');
