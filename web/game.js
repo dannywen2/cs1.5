@@ -140,6 +140,17 @@ function cellBlockedAt(p) {
   return A.layers(c[0], c[1]).length === 0;
 }
 
+// 线段与球相交测试 (烟雾遮挡用): 线段 AB 到球心 C 的最近距离 < 半径即遮挡
+function segIntersectsSphere(a, b, c, r) {
+  const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+  const acx = c[0] - a.x, acy = c[1] - a.y, acz = c[2] - a.z;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  const t = len2 > 1e-9
+    ? clamp((acx * abx + acy * aby + acz * abz) / len2, 0, 1) : 0;
+  const dx = acx - abx * t, dy = acy - aby * t, dz = acz - abz * t;
+  return dx * dx + dy * dy + dz * dz < r * r;
+}
+
 function nearestLayerIndex(ls, y) {
   if (!ls || !ls.length) return 0;
   let bi = 0, bd = Infinity;
@@ -505,8 +516,35 @@ class Bot {
     let goalY = this.pos[1];
     const B = S.BOMB;
     if (B.state === 'planted' && B.pos) {
-      goal = A.nearestOpen(A.cellOf(B.pos));
+      // 已下包: 不全员扎堆。守方 (T) 分散到包点环形各角度架枪;
+      // 拆方 (CT) 只有最近的一人直接去拆, 其余在包点外围封锁拆弹者
+      // (原版 bot 的守包/拆包分工, 否则 5 人叠在 C4 上互相挡枪线)。
+      const site = A.nearestOpen(A.cellOf(B.pos));
       goalY = B.pos[1];
+      const defenders = this.team === attackTeam();
+      if (defenders) {
+        // 每人按序号取环形里不同的格子: 分散守包各角度
+        const idx = this.guardIndex != null ? this.guardIndex
+          : (this.guardIndex = this.name.charCodeAt(this.name.length - 1));
+        const ring = ringCells(site, 3, 9, 12);
+        goal = ring.length ? ring[idx % ring.length] : site;
+      } else {
+        // 拆方: 只有离炸弹最近的一名队友去拆, 其余在外围 12~16 格封锁
+        const mates = this.team === 't' ? S.enemies : S.allies;
+        let nearest = null, nd = Infinity;
+        for (const m of mates) {
+          if (!m || !m.enabled) continue;
+          const d = dist2(m.pos, B.pos);
+          if (d < nd) { nd = d; nearest = m; }
+        }
+        if (nearest === this || (S.playerTeam === this.team && !S.player.dead
+            && dist2(S.player.pos, B.pos) < nd)) {
+          goal = site;                        // 我是拆弹者
+        } else {
+          const ring = ringCells(site, 10, 16, 10);
+          goal = ring.length ? ring[0] : site;  // 其余人外围封锁
+        }
+      }
     } else if (this.team === 't' && B.state === 'live' && this.carrier && B.targetPos) {
       goal = A.nearestOpen(A.cellOf(B.targetPos));
       goalY = B.targetPos[1];
@@ -666,7 +704,16 @@ class Bot {
   canSee(pos) {
     const eye = obj3([this.pos[0], this.pos[1] + A.EYE_HEIGHT, this.pos[2]]);
     const tgt = obj3([pos[0], pos[1] + A.EYE_HEIGHT, pos[2]]);
-    try { return A.gridClear(eye, tgt, 8); } catch (e) { return false; }
+    try {
+      if (!A.gridClear(eye, tgt, 8)) return false;
+    } catch (e) { return false; }
+    // 烟雾遮挡: 视线与任一活跃烟团相交 (近似: 采样线段到烟心的最小距离)
+    // 就视为看不清 —— 封烟拆包 / 烟后过点成为真实战术。
+    for (const s of S.smokes) {
+      if (!s || s.ttl <= 0.5) continue;            // 快消散的烟不算遮挡
+      if (segIntersectsSphere(eye, tgt, s.pos, s.radius * 0.75)) return false;
+    }
+    return true;
   }
 
   // 目标是否已经在视野锥内 (决定要不要开枪 / 是否需要先转身)
@@ -1183,6 +1230,27 @@ class Bot {
               play('radio');
             }
           }
+        }
+      }
+      // 报点协同: 队友正在交战时, 自己主动加入支援 (分享目标位置),
+      // 并与已支援的队友从不同方向接近 —— 包夹而不是排成一条线跟进。
+      if (!this.target && this.state !== 'combat') {
+        const mates = this.team === 't' ? S.enemies : S.allies;
+        for (const m of mates) {
+          if (!m || m === this || !m.enabled || m.state !== 'combat') continue;
+          if (dist2(this.pos, m.pos) > 900) continue;   // 太远支援不过来
+          this.knownPos = copy3(m.pos);
+          this.knownTime = S.time;
+          this.state = 'hunt';
+          // 从侧翼接近: 垂直于"我->交战点"方向偏移 150~300 单位
+          const dx = m.pos[0] - this.pos[0], dz = m.pos[2] - this.pos[2];
+          const l = Math.hypot(dx, dz) || 1;
+          const sign = Math.random() < 0.5 ? -1 : 1;
+          const off = rand(150, 300);
+          this.knownPos[0] += -dz / l * off * sign;
+          this.knownPos[2] += dx / l * off * sign;
+          this.repath();
+          break;
         }
       }
       if (this.target) {
