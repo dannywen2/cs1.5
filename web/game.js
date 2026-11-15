@@ -1427,6 +1427,12 @@ function notifyKill(killer, victim, headshot, weaponId = null, icon = null) {
     const bot = S.enemies.concat(S.allies).find(b => b && b.name === killer);
     if (bot && bot.stats) bot.stats.kills += 1;
   }
+  // 全场累计表: bot 死亡后会从列表移除, 结算统计必须独立于存活对象
+  if (!S.matchBoard) S.matchBoard = Object.create(null);
+  const kb = S.matchBoard[killer] || (S.matchBoard[killer] = { kills: 0, deaths: 0 });
+  kb.kills += 1;
+  const vb = S.matchBoard[victim] || (S.matchBoard[victim] = { kills: 0, deaths: 0 });
+  vb.deaths += 1;
   addKill(killer, victim, headshot, wid, kindicon);   // state.js -> S.hooks.addKill -> hud
   if (typeof prevHooks.killFeed === 'function'
       && prevHooks.killFeed !== prevHooks.addKill) {
@@ -2068,6 +2074,7 @@ export function restartMatch() {
   S.roundNum = 0;
   S.money = 800;
   S.lossStreak = 0;
+  S.matchBoard = null;
   S.score = 0;
   S.allyKills = 0;
   if (!S.stats) S.stats = { kills: 0, deaths: 0 };
@@ -2287,9 +2294,15 @@ export function roundEnd(winner, reason) {
       ? `比赛结束 - 平局 ${M.ctScoreTotal}:${M.tScoreTotal}`
       : `比赛结束 - ${M.winner.toUpperCase()} 获胜 ${M.ctScoreTotal}:${M.tScoreTotal}`;
     const won = M.winner === S.playerTeam;
+    // MVP/结算统计: 全场累计表 (S.matchBoard, 独立于存活 bot)
+    const board = Object.entries(S.matchBoard || {}).map(([name, s]) => ({
+      name, kills: s.kills || 0, deaths: s.deaths || 0, me: name === '你',
+    }));
+    board.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
     const panel = {
       title, score: `${M.ctScoreTotal}:${M.tScoreTotal}`,
       canOvertime: M.winner === 'draw', winner: M.winner,
+      board, mvp: board[0] || null,
     };
     S.matchPanel = panel;
     showCenter(title, M.winner === 'draw' ? '#ffd678' : (won ? '#78ff78' : '#ff6464'));
@@ -2553,8 +2566,8 @@ export function onPlayerDeath() {
   S.weapon = fallback;
   callUI('switchWeapon', fallback);
   updateEquipText();
-  showCenter('你已阵亡  ·  观战队友', '#ffa078');
-  callUI('showSpectate', '你已阵亡  ·  观战队友');
+  showCenter('你已阵亡  ·  左键换目标 / 右键或 V 切观战模式', '#ffa078');
+  callUI('showSpectate', '你已阵亡  ·  左键换目标  ·  右键切模式');
   if (p.hasC4) {
     dropC4(p.pos);
     p.hasC4 = false;

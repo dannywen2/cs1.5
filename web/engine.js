@@ -341,10 +341,25 @@ function cycleSpectate() {
 function toggleFreeCam() {
   const sp = getSpectate();
   sp.free = !sp.free;
+  sp.mode = sp.free ? 'free' : 'follow';
   if (sp.free && !sp.freePos && camera) {
     sp.freePos = [camera.position.x, camera.position.y, camera.position.z];
   }
   showCenter(sp.free ? '自由观战' : '跟随队友', '#b4d2ff', 1.4);
+}
+
+// 观战模式循环: follow -> fps -> free -> follow (V 键 / 观战时按右键)
+function cycleSpectateMode() {
+  const sp = getSpectate();
+  const order = ['follow', 'fps', 'free'];
+  const cur = order.indexOf(sp.mode || (sp.free ? 'free' : 'follow'));
+  sp.mode = order[(cur + 1) % order.length];
+  sp.free = sp.mode === 'free';
+  if (sp.mode === 'free' && !sp.freePos && camera) {
+    sp.freePos = [camera.position.x, camera.position.y, camera.position.z];
+  }
+  showCenter(sp.mode === 'follow' ? '跟随观战'
+    : sp.mode === 'fps' ? '第一人称观战' : '自由观战', '#b4d2ff', 1.4);
 }
 
 function updateFreeCam(dt) {
@@ -482,12 +497,12 @@ function syncCamera() {
   const dtSyncCam = Math.min(0.05, Math.max(0.001, (nowSync - lastSyncT) / 1000));
   lastSyncT = nowSync;
 
-  // 阵亡 -> 第三人称跟随队友。
-  // 旧实现无论如何都把相机放在玩家位置, 玩家死后位置不变, 相机就卡在尸体里;
-  // bot 走近时会直接穿进模型内部 (实测画面 79.7% 是肤色, 能看到头的内侧)。
+  // 阵亡 -> 观战模式循环: 跟随(第三人称) -> 第一人称 -> 自由飞。
+  // sp.mode = 'follow' | 'fps' | 'free'; sp.free 保留为 'free' 的兼容别名。
   if (p.dead) {
     const sp = getSpectate();
-    if (sp.free) {
+    const mode = sp.mode || (sp.free ? 'free' : 'follow');
+    if (mode === 'free') {
       if (!sp.freePos) sp.freePos = [p.pos[0], p.pos[1] + eyeHeight() + 40, p.pos[2]];
       camera.position.set(sp.freePos[0], sp.freePos[1], sp.freePos[2]);
       camera.rotation.set(0, (sp.yaw || 0) * DEG * yawSign + yawOffset, 0, 'YXZ');
@@ -498,6 +513,17 @@ function syncCamera() {
     }
     const t = spectatorTarget();
     if (t) {
+      if (mode === 'fps') {
+        // 第一人称观战: 相机贴在目标眼位, 朝向随目标 yaw/pitch
+        const tyaw = Number.isFinite(t.yaw) ? t.yaw : 0;
+        const tpitch = Number.isFinite(t.pitch) ? t.pitch : 0;
+        camera.position.set(t.pos[0], t.pos[1] + A.EYE_HEIGHT * 0.92, t.pos[2]);
+        camera.rotation.set(tpitch * DEG * pitchSign, tyaw * DEG * yawSign + yawOffset, 0, 'YXZ');
+        camera.updateMatrixWorld();
+        skyCamera.quaternion.copy(camera.quaternion);
+        skyCamera.position.set(0, 0, 0);
+        return;
+      }
       // 肩后视角: 目标身后 110 单位、上方 55 单位, 略微偏右
       const yaw = Number.isFinite(t.yaw) ? t.yaw : 0;
       const bx = -Math.sin(yaw * DEG), bz = -Math.cos(yaw * DEG);   // 目标背后
@@ -1593,7 +1619,7 @@ export function initEngine(canvas) {
     shoot, rayHit, buildViewmodel, addBulletHole,
     addEntityMesh, removeEntityMesh, makeBotMesh,
     getCamera, getScene, getVM,
-    toggleSilencer, toggleGlockMode, cycleSpectate, toggleFreeCam,
+    toggleSilencer, toggleGlockMode, cycleSpectate, toggleFreeCam, cycleSpectateMode,
     clearEffects, getEffects: () => effectArrays(),
   });
   window.addEventListener('resize', onResize);
@@ -1601,6 +1627,7 @@ export function initEngine(canvas) {
   S.hooks.toggleGlockMode = toggleGlockMode;
   S.hooks.cycleSpectate = cycleSpectate;
   S.hooks.toggleFreeCam = toggleFreeCam;
+  S.hooks.cycleSpectateMode = cycleSpectateMode;
   return renderer;
 }
 

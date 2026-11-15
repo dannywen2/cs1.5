@@ -622,6 +622,23 @@ function showMatchOver(panel) {
   S.matchPanel = p;
   setText(D.moTitle, p.title || '比赛结束');
   setText(D.moScore, p.score ? `最终比分  ${p.score}` : '');
+  // MVP 与击杀/死亡排行 (panel.board 来自 game.js 的 S.matchBoard 累计表)
+  if (p.mvp) {
+    setText(D.moMvp, `MVP: ${p.mvp.name}  (${p.mvp.kills} 击杀 / ${p.mvp.deaths} 阵亡)`);
+  } else setText(D.moMvp, '');
+  const el = D.moBoard;
+  if (el) {
+    if (p.board && p.board.length) {
+      el.innerHTML = '<div class="mo-row mo-head"><span>玩家</span><span>击杀</span><span>阵亡</span></div>'
+        + p.board.slice(0, 8).map((r, i) =>
+          `<div class="mo-row${r.me ? ' me' : ''}"><span>${i + 1}. ${esc(r.name)}</span><span>${r.kills}</span><span>${r.deaths}</span></div>`,
+        ).join('');
+      el.style.display = '';
+    } else {
+      el.innerHTML = '';
+      el.style.display = 'none';
+    }
+  }
   show(D.moBtnOt, !!p.canOvertime);
   show(D.matchOver, true);
   show(D.pause, false);
@@ -1142,8 +1159,9 @@ function initInput() {
       if (!S.started || S.buyMenuOpen || S.menuMode || S.matchPanel) return;
       if (!S.pointerLocked) { requestLock(); return; }
       if (S.player.dead) {
-        // 阵亡观战: 左/右键切换跟随目标
-        if (e.button === 0 || e.button === 2) callEngine('cycleSpectate');
+        // 阵亡观战: 左键切换跟随目标, 右键循环观战模式 (跟随/第一人称/自由)
+        if (e.button === 0) callEngine('cycleSpectate');
+        else if (e.button === 2) callEngine('cycleSpectateMode');
         return;
       }
       if (e.button === 0) {
@@ -1172,7 +1190,7 @@ function initInput() {
       if (code === 'Space' || code === 'ArrowLeft' || code === 'ArrowRight') {
         e.preventDefault(); callEngine('cycleSpectate'); return;
       }
-      if (code === 'KeyV') { callEngine('toggleFreeCam'); return; }
+      if (code === 'KeyV') { callEngine('cycleSpectateMode'); return; }
       if (code === 'Tab') return;
       return;
     }
