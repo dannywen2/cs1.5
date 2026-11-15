@@ -117,27 +117,33 @@
 
 <!-- ===================== 开始 ===================== -->
 <div id="start" class="overlay hidden">
-  <h1>CS 1.5 复刻版</h1>
-  <div class="help">
-    <div>WASD 移动 &nbsp;·&nbsp; Shift 静步 &nbsp;·&nbsp; Ctrl 蹲伏 &nbsp;·&nbsp; 空格 跳跃</div>
-    <div>鼠标左键 射击 &nbsp;·&nbsp; 鼠标右键 AWP 开镜(按住) &nbsp;·&nbsp; R 换弹</div>
-    <div>1 / 2 / 3 主武器 / 手枪 / 匕首 &nbsp;·&nbsp; Q 上一把武器</div>
-    <div>G HE 手雷 &nbsp;·&nbsp; F 闪光弹 &nbsp;·&nbsp; E 按住拆弹 &nbsp;·&nbsp; B 购买菜单</div>
-    <div>Tab 计分板 &nbsp;·&nbsp; [ / ] 调鼠标灵敏度 &nbsp;·&nbsp; ESC 退出鼠标锁定</div>
-    <div id="start-role" class="help-dim">你是 CT：阻止 T 安放 C4，或按住 E 拆除已安放的 C4</div>
+  <div class="menu-frame">
+    <div class="menu-head">
+      <div class="menu-kicker">COUNTER-STRIKE 1.5</div>
+      <h1>CS 1.5 复刻版</h1>
+      <div class="menu-rule"></div>
+    </div>
+    <div class="help">
+      <div>WASD 移动 &nbsp;·&nbsp; Shift 静步 &nbsp;·&nbsp; Ctrl 蹲伏 &nbsp;·&nbsp; 空格 跳跃</div>
+      <div>鼠标左键 射击 &nbsp;·&nbsp; 鼠标右键 AWP 开镜(按住) &nbsp;·&nbsp; R 换弹</div>
+      <div>1 / 2 / 3 主武器 / 手枪 / 匕首 &nbsp;·&nbsp; Q 上一把武器</div>
+      <div>G HE 手雷 &nbsp;·&nbsp; F 闪光弹 &nbsp;·&nbsp; E 按住拆弹 &nbsp;·&nbsp; B 购买菜单</div>
+      <div>Tab 计分板 &nbsp;·&nbsp; [ / ] 调鼠标灵敏度 &nbsp;·&nbsp; ESC 退出鼠标锁定</div>
+      <div id="start-role" class="help-dim">你是 CT：阻止 T 安放 C4，或按住 E 拆除已安放的 C4</div>
+    </div>
+    <div id="start-thumb-wrap"><img id="start-thumb" alt="de_dust2 俯视图"></div>
+    <div id="start-settings">
+      <label>鼠标灵敏度 <input id="set-sens" type="range" min="0.2" max="8" step="0.1" value="2"><span id="set-sens-val">2.0</span></label>
+      <label>音量 <input id="set-volume" type="range" min="0" max="1" step="0.05" value="0.8"><span id="set-volume-val">80%</span></label>
+      <label>视野 FOV <input id="set-fov" type="range" min="70" max="110" step="1" value="90"><span id="set-fov-val">90</span></label>
+      <label>每队 Bot <select id="set-bots"><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></label>
+      <label>难度 <select id="set-diff"><option value="0.75">简单</option><option value="1" selected>普通</option><option value="1.35">困难</option></select></label>
+      <label>赛制 <select id="set-mr"><option value="9">MR9</option><option value="12">MR12</option><option value="15" selected>MR15</option></select></label>
+      <label>3D 定位音频 <input id="set-positional" type="checkbox" checked></label>
+    </div>
+    <button id="start-btn" type="button">▶ &nbsp;进入战场</button>
+    <p class="sub">点击后浏览器会锁定鼠标并启用音频</p>
   </div>
-  <div id="start-thumb-wrap"><img id="start-thumb" alt="de_dust2 俯视图"></div>
-  <div id="start-settings">
-    <label>鼠标灵敏度 <input id="set-sens" type="range" min="0.2" max="8" step="0.1" value="2"><span id="set-sens-val">2.0</span></label>
-    <label>音量 <input id="set-volume" type="range" min="0" max="1" step="0.05" value="0.8"><span id="set-volume-val">80%</span></label>
-    <label>视野 FOV <input id="set-fov" type="range" min="70" max="110" step="1" value="90"><span id="set-fov-val">90</span></label>
-    <label>每队 Bot <select id="set-bots"><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></label>
-    <label>难度 <select id="set-diff"><option value="0.75">简单</option><option value="1" selected>普通</option><option value="1.35">困难</option></select></label>
-    <label>赛制 <select id="set-mr"><option value="9">MR9</option><option value="12">MR12</option><option value="15" selected>MR15</option></select></label>
-    <label>3D 定位音频 <input id="set-positional" type="checkbox" checked></label>
-  </div>
-  <button id="start-btn" type="button">点击进入战场</button>
-  <p class="sub">点击后浏览器会锁定鼠标并启用音频</p>
 </div>
 
 <!-- 暂停菜单 -->
@@ -153,11 +159,18 @@
 
 <!-- 比赛结束 -->
 <div id="match-over" class="overlay hidden">
-  <h1 id="mo-title">比赛结束</h1>
-  <div id="mo-score"></div>
-  <div class="menu-buttons">
-    <button id="mo-btn-ot" type="button">进入加时 (MR3)</button>
-    <button id="mo-btn-restart" type="button">重开比赛</button>
+  <div class="menu-frame">
+    <div class="menu-head">
+      <h1 id="mo-title">比赛结束</h1>
+      <div class="menu-rule"></div>
+    </div>
+    <div id="mo-score"></div>
+    <div id="mo-mvp"></div>
+    <div id="mo-board"></div>
+    <div class="menu-buttons">
+      <button id="mo-btn-ot" type="button">进入加时 (MR3)</button>
+      <button id="mo-btn-restart" type="button">重开比赛</button>
+    </div>
   </div>
 </div>
 

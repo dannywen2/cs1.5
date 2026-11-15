@@ -474,6 +474,52 @@ button { font: inherit; }
   object-fit: cover;
 }
 
+/* -------------------- 主菜单美化 -------------------- */
+.menu-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(8px, 1.4vh, 18px);
+  max-width: min(92vw, 780px);
+  max-height: 94vh;
+  overflow-y: auto;
+  padding: clamp(18px, 2.6vw, 40px) clamp(22px, 3.4vw, 56px);
+  background: linear-gradient(180deg, rgba(16, 30, 48, .82), rgba(6, 13, 24, .88));
+  border: 1px solid rgba(150, 190, 240, .28);
+  border-top: 3px solid #ffd678;
+  border-radius: 6px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .65);
+}
+.menu-kicker {
+  color: #7fa2c8;
+  font-size: clamp(10px, .85vw, 14px);
+  letter-spacing: .55em;
+  text-indent: .55em;      /* 抵消最后一个字母的字距, 视觉居中 */
+  font-weight: 600;
+}
+.menu-head h1 { margin: .1em 0 0; }
+.menu-rule {
+  width: min(60vw, 420px);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 214, 120, .8), transparent);
+}
+#start-btn {
+  pointer-events: auto;
+  padding: clamp(10px, 1.2vh, 18px) clamp(28px, 3vw, 56px);
+  color: #06101c;
+  background: #ffd678;
+  border: none;
+  border-radius: 4px;
+  font-size: clamp(15px, 1.3vw, 22px);
+  font-weight: 700;
+  letter-spacing: .12em;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(255, 214, 120, .28);
+  transition: background .15s, transform .1s;
+}
+#start-btn:hover { background: #ffeaa8; transform: translateY(-1px); }
+#start-btn:active { transform: translateY(0); }
+
 /* -------------------- 菜单按钮 / 比赛结束 -------------------- */
 .menu-buttons {
   display: flex;
@@ -496,6 +542,29 @@ button { font: inherit; }
 }
 .menu-buttons button:hover { background: #ffeaa8; }
 #mo-score { font-size: 1.5em; color: #ffdc82; margin: .6em 0; }
+#mo-mvp { color: #ffd678; font-size: 1.05em; font-weight: 600; letter-spacing: .04em; }
+#mo-board {
+  display: flex;
+  flex-direction: column;
+  min-width: min(78vw, 420px);
+  margin: .4em 0 .8em;
+  border: 1px solid rgba(140, 180, 230, .22);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: clamp(12px, 1vw, 16px);
+}
+.mo-row {
+  display: grid;
+  grid-template-columns: 1fr 4.5em 4.5em;
+  gap: .5em;
+  padding: .35em 1em;
+  text-align: left;
+  color: #c8d6ea;
+}
+.mo-row:nth-child(even) { background: rgba(255, 255, 255, .04); }
+.mo-row.mo-head { color: #7fa2c8; font-weight: 600; background: rgba(10, 22, 36, .8); }
+.mo-row span:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.mo-row.me { color: #ffd678; font-weight: 700; }
 
 /* -------------------- 新增 HUD 提示 -------------------- */
 #freeze-text {
