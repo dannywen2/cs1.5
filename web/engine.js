@@ -474,8 +474,13 @@ function spectatorTarget() {
   return sp.target;
 }
 
+let lastSyncT = 0;
 function syncCamera() {
   const p = S.player;
+  // 供蹲起插值用: syncCamera 每帧可能调用多次, 用真实时钟差近似 dt
+  const nowSync = performance.now();
+  const dtSyncCam = Math.min(0.05, Math.max(0.001, (nowSync - lastSyncT) / 1000));
+  lastSyncT = nowSync;
 
   // 阵亡 -> 第三人称跟随队友。
   // 旧实现无论如何都把相机放在玩家位置, 玩家死后位置不变, 相机就卡在尸体里;
@@ -534,7 +539,14 @@ function syncCamera() {
     return;
   }
 
-  camera.position.set(p.pos[0], p.pos[1] + eyeHeight(), p.pos[2]);
+  // 蹲起眼高平滑过渡 (原版蹲下有 ~0.3s 的过渡动画, 不是瞬切):
+  // 指数逼近目标眼高, 起身时相机缓缓抬回, 不再"砰"地一下跳起。
+  {
+    const want = p.crouching ? CROUCH_EYE : A.EYE_HEIGHT;
+    if (!Number.isFinite(p.eyeSmooth)) p.eyeSmooth = want;
+    p.eyeSmooth += (want - p.eyeSmooth) * Math.min(1, dtSyncCam * 10);
+    camera.position.set(p.pos[0], p.pos[1] + p.eyeSmooth, p.pos[2]);
+  }
   camera.rotation.set(p.pitch * DEG * pitchSign, p.yaw * DEG * yawSign + yawOffset, 0, 'YXZ');
   camera.updateMatrixWorld();
   skyCamera.quaternion.copy(camera.quaternion);
@@ -637,6 +649,19 @@ export function rayHit(originVec3, dirVec3, maxDist = A.BULLET_RANGE) {
     : -1;
   if (wallT >= 0 && wallT <= maxT) {
     if (entity && entT < wallT) return entityResult();
+    // 穿墙 (wallbang): 若墙后近距离内有 bot (薄墙/木箱后), 标记穿透命中,
+    // 由调用方按墙厚/材质衰减伤害。厚度 = bot 入射 t - 墙入射 t。
+    if (entity && typeof A.raySolidDistanceAfter === 'function') {
+      const exitT = A.raySolidDistanceAfter(o.x, o.y, o.z, d.x, d.y, d.z,
+        Math.min(entT + 1, maxT), wallT + 0.1);
+      const wallThick = exitT >= 0 ? exitT - wallT : entT - wallT;
+      if (wallThick > 0 && wallThick <= 64) {
+        const r = entityResult();
+        r.wallbang = true;
+        r.wallThick = wallThick;
+        return r;
+      }
+    }
     return {
       kind: 'wall', entity: null, normal: back,
       point: [o.x + d.x * wallT, o.y + d.y * wallT, o.z + d.z * wallT],
@@ -721,21 +746,38 @@ function updatePhysics(dt) {
   let dx = f[0] * fw + r[0] * sd;
   let dz = f[2] * fw + r[2] * sd;
   const len = Math.hypot(dx, dz);
+  p.crouching = ctrlHeld();
+  p.speed = p.crouching ? A.CROUCH_SPEED : (shiftHeld() ? A.WALK_SPEED : A.RUN_SPEED);
+  // 空中用速度向量积分 (GoldSrc air accelerate): 起跳保留地面速度, 空中按键
+  // 加速度补充、上限钳制 —— 空中可以小幅变向但不能瞬间转向。
+  if (p.vel2 === undefined) p.vel2 = [0, 0];
   if (len > 0) {
     dx /= len; dz /= len;
-    const crouch = ctrlHeld();
-    p.crouching = crouch;
-    p.speed = crouch ? A.CROUCH_SPEED : (shiftHeld() ? A.WALK_SPEED : A.RUN_SPEED);
-    const spd = p.speed * (p.grounded ? 1 : 0.92);
-    const nx = p.pos[0] + dx * spd * dt;
-    const nz = p.pos[2] + dz * spd * dt;
-    if (!solid(nx, p.pos[1], p.pos[2])) p.pos[0] = nx;
-    else if (dx) stepUp(nx, p.pos[2]);
-    if (!solid(p.pos[0], p.pos[1], nz)) p.pos[2] = nz;
-    else if (dz) stepUp(p.pos[0], nz);
-  } else {
-    p.crouching = ctrlHeld();
-    p.speed = p.crouching ? A.CROUCH_SPEED : (shiftHeld() ? A.WALK_SPEED : A.RUN_SPEED);
+    if (p.grounded) {
+      p.vel2[0] = dx * p.speed;
+      p.vel2[1] = dz * p.speed;
+    } else {
+      // 空中加速度: wishdir * airAccel * dt, 速度增量钳制在 RUN_SPEED 内
+      const acc = A.AIR_CONTROL * A.RUN_SPEED * dt;
+      const nvx = p.vel2[0] + dx * acc, nvz = p.vel2[1] + dz * acc;
+      const cur = Math.hypot(p.vel2[0], p.vel2[1]);
+      const nxt = Math.hypot(nvx, nvz);
+      if (nxt > Math.max(cur, A.RUN_SPEED)) {
+        const k = Math.max(cur, A.RUN_SPEED) / nxt;
+        p.vel2[0] = nvx * k; p.vel2[1] = nvz * k;
+      } else {
+        p.vel2[0] = nvx; p.vel2[1] = nvz;
+      }
+    }
+  } else if (p.grounded) {
+    p.vel2[0] = 0; p.vel2[1] = 0;
+  }
+  {
+    const mx = p.vel2[0] * dt, mz = p.vel2[1] * dt;
+    if (!solid(p.pos[0] + mx, p.pos[1], p.pos[2])) p.pos[0] += mx;
+    else if (mx) stepUp(p.pos[0] + mx, p.pos[2]);
+    if (!solid(p.pos[0], p.pos[1], p.pos[2] + mz)) p.pos[2] += mz;
+    else if (mz) stepUp(p.pos[0], p.pos[2] + mz);
   }
 
   if (spaceHeld() && p.grounded) {
@@ -759,7 +801,13 @@ function updatePhysics(dt) {
           const mid = (lo + hi) * 0.5;
           if (solid(p.pos[0], mid, p.pos[2])) lo = mid; else hi = mid;
         }
-        p.pos[1] = hi; p.vy = 0; p.grounded = true; p.airTime = 0;
+        p.pos[1] = hi; p.vy = 0; p.grounded = true;
+        // 落地音效: 下落速度越大声音越重 (原版 pl_fall / pl_step 重击)
+        if (p.airTime > 0.25) {
+          const name = STEP_MATERIALS[surfaceName(p.pos)] || 'step_conc';
+          play(name, p.pos);
+        }
+        p.airTime = 0;
       } else {
         p.vy = 0;
       }
@@ -1142,24 +1190,46 @@ function fireOne(fromBurst = false) {
   rec.index = (Number(rec.index) || 0) + 1;
   rec.lastAt = S.time;
 
-  const spread = wp.spread * (S.scoped ? 0.3 : 1) * (shiftHeld() ? 2.5 : 1)
-    * (silenced ? 0.85 : 1);
+  // 动态散布 (还原 CS 1.5 的 inaccuracy 机制, 逐枪调参见 asset.js SPREAD_TUNING):
+  //   移动惩罚按实际速度比例 × 该枪 move 系数, 空中 × air (狙击跳狙最惨),
+  //   蹲下 × crouch 收束, 连射热度 = heat × 武器 recoil, 狙击未开镜腰射 ×6。
+  const tun = A.SPREAD_TUNING[wid] || A.DEFAULT_TUNING;
+  const moveK = p.grounded
+    ? clamp((p.speed || 0) / A.RUN_SPEED, 0, 1) * (S.scoped ? tun.scopedMove : tun.move)
+    : tun.air;
+  // 霰弹枪的弹丸锥是固定的 (原版 pellets 不随连射变), heatK 只作用于单弹丸武器
+  const heatK = (wp.pellets | 0 || 1) > 1
+    ? 1
+    : 1 + (S.crossHeat || 0) * tun.heat * (wp.recoil || 1);
+  const burstK = (S.glockMode === 'burst' && wid === 'glock18') ? tun.burst : 0;
+  const scopeK = wp.zoom && !S.scoped ? 6 : 1;
+  const spread = wp.spread * (1 + moveK)
+    * (p.crouching ? tun.crouch : 1) * heatK * (1 + burstK) * scopeK
+    * (silenced ? 0.85 : 1)
+    // 换弹后精度不会立刻恢复 (原版换弹收枪动作打断了持枪稳定): 保留一半热度
+    * (S.reloading ? 1.5 : 1);
   const dmgScale = silenced ? 0.9 : 1;
   const dirYaw = kickYaw * DEG * RECOIL_DIR_SCALE;
   const dirPitch = kickPitch * DEG * RECOIL_DIR_SCALE;
 
   // 霰弹枪一次打多颗弹丸, 每颗独立散射 / 独立判定 (CS 1.5 的 pellets 机制)。
-  // 旧实现只发一条射线, 所以 M3 打不出"一枪糊脸"的效果。
+  // 弹丸散布用圆形锥形分布 (均匀角度 + 半径开方), 而不是方形随机 ——
+  // 方形分布会在对角线方向堆积, 视觉上"弹道挤成一束"。
   const pellets = Math.max(1, wp.pellets | 0 || 1);
+  const isPellet = pellets > 1;
   let anyEntity = false, anyHead = false, anyWall = null, bloodDone = false;
   let farthest = null, farthestD = -1;
+  let holeCount = 0, tracerCount = 0;
   for (let i = 0; i < pellets; i++) {
     _dir.copy(_fwd)
       .addScaledVector(_right, dirYaw)
       .addScaledVector(_up, dirPitch);
     if (spread > 0) {
-      _dir.addScaledVector(_right, rand(-spread, spread));
-      _dir.addScaledVector(_up, rand(-spread, spread));
+      // 圆形锥形: 角度均匀取 [0,2π), 半径按 sqrt(u) 均匀铺满圆盘
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.sqrt(Math.random()) * spread;
+      _dir.addScaledVector(_right, Math.cos(ang) * rad)
+        .addScaledVector(_up, Math.sin(ang) * rad);
     }
     _dir.normalize();
 
@@ -1168,6 +1238,12 @@ function fireOne(fromBurst = false) {
     if (hp) {
       const d = dist3([origin.x, origin.y, origin.z], hp);
       if (d > farthestD) { farthestD = d; farthest = hp; }
+    }
+    // 每颗弹丸一条曳光 (霰弹最多画 4 条, 避免糊屏; 步枪只 1 条)
+    if (isPellet ? tracerCount < 4 : i === 0) {
+      tracerCount += 1;
+      spawnTracer(origin, _fwd, _right, _up, hp || [origin.x + _dir.x * A.BULLET_RANGE,
+        origin.y + _dir.y * A.BULLET_RANGE, origin.z + _dir.z * A.BULLET_RANGE]);
     }
     if (hit.kind === 'entity') {
       const e = hit.entity;
@@ -1180,12 +1256,18 @@ function fireOne(fromBurst = false) {
         anyEntity = true;
         continue;
       }
-      // 按命中高度判定部位, 应用 CS 1.5 的部位倍率与距离衰减
+      // 按命中高度判定部位, 应用 CS 1.5 的部位倍率与距离衰减。
+      // GoldSrc 原版公式: damage × range_mod^(distance/500) —— 250 单位内
+      // 几乎无衰减, 旧实现 (1 - d×k) 线性衰减对霰弹枪过于苛刻, 糊脸打不出
+      // 应有的秒杀感。
       const zone = hitZoneOf(hit.point, posOf(e.pos));
       const mult = A.HITBOX_MULT[zone] ?? 1;
       const travelled = dist3(p.pos, hit.point);
-      const falloff = Math.max(0.4, 1 - travelled * (1 - (wp.range_mod ?? 0.98)) * 0.02);
-      const dmg = wp.dmg * mult * falloff * dmgScale;
+      const falloff = Math.max(0.25, Math.pow(wp.range_mod ?? 0.98, travelled / 500));
+      // 穿墙 (wallbang): 伤害按穿透厚度衰减, 64 单位内 30%~70%
+      const penK = hit.wallbang
+        ? Math.max(0.30, 1 - (hit.wallThick || 32) / 64 * 0.7) : 1;
+      const dmg = wp.dmg * mult * falloff * dmgScale * penK;
       if (typeof e.takeDamage === 'function') {
         e.takeDamage(dmg, zone === 'head', S.player.pos, '你', zone);
       }
@@ -1193,11 +1275,16 @@ function fireOne(fromBurst = false) {
       if (zone === 'head') anyHead = true;
     } else if (hit.kind === 'wall') {
       anyWall = hit;
+      // 每颗弹丸独立弹孔 (霰弹最多 3 个, 一面墙上是散开的孔洞簇)
+      if (holeCount < (isPellet ? 3 : 1)) {
+        holeCount += 1;
+        addBulletHole(hit.point, hit.normal);
+      }
     }
   }
 
-  // 每次开火只画一条曳光弹, 终点取本次所有弹丸的最远命中点
-  if (farthest) spawnTracer(origin, _fwd, _right, _up, farthest);
+  // 非霰弹: 曳光弹已在循环里画 (第 0 颗); 霰弹一条都没有时兜底画中心一条
+  if (!tracerCount && farthest) spawnTracer(origin, _fwd, _right, _up, farthest);
 
   if (anyEntity) {
     play(anyHead ? 'head' : 'hit');
@@ -1225,8 +1312,9 @@ function hitZoneOf(point, feet) {
 // ---------------------------------------------------------------------------
 export function makeBotMesh(modelName, weaponName) {
   const group = new THREE.Group();
-  // 局部 y∈[0,1] -> 72 单位身高; 子节点保持 identity scale
-  group.scale.set(32, 72, 32);
+  // 局部 y∈[0,1] -> 72 单位身高。三轴等比: .geo 归一化时保持了真实宽高比,
+  // x/z 用 32 会把模型横向压瘦约 44% (与原版相比显得"瘦长")。
+  group.scale.setScalar(72);
   const parts = [];
   const gunParts = [];
   // 该玩家模型的行走/奔跑动画 (可能缺失 -> 退回静态姿态)
@@ -1311,26 +1399,13 @@ export function makeBotMesh(modelName, weaponName) {
     }),
   );
   hpBar.position.set(0, 1.10, 0);
-  // group 的缩放是 (32,72,32): 血条会被纵向拉伸 72/32 = 2.25 倍, 比例从
-  // 13.64:1 变成 30.7:1。补偿方式是把高度方向预先压回去 (乘 32/72),
-  // 而不是给 x/y 各除以父级分量 —— 后者会连整体大小一起改掉。
-  hpBar.scale.set(1, 32 / 72, 1);
   group.add(hpBar);
 
   // 枪口焰: 一块小方片, 只在开火瞬间显示。
   //
-  // 注意坐标系: 这个 group 的 scale 是 (32, 72, 32) (把 0..1 的模型局部
-  // 坐标放大成"厘米"), 所以 flash 的几何尺寸和位置都必须是**局部比例**,
-  // 不能按世界单位写。旧实现用 PlaneGeometry(1,1) + scale 0.16, 经 group
-  // 缩放后在世界里变成约 5x11 单位的大方块, 一开火就把手臂"撑开"了。
-  // 这里改成 0.045 (约 1.4 x 1.4 世界单位), 与原版那个小闪光相称。
-  // 枪口焰: 一块小方片, 只在开火瞬间显示。
-  //
-  // 这里有一个必须绕开的坑: 这个 group 的缩放是 (32, 72, 32) —— 非等比。
-  // 任何挂在上面的子节点都会被"拉扁/拉长", 一个正方形平面会变成 5 x 10,
-  // 看起来就像两只手张开成一个"大"字。
-  // 解法: 让 flash 自己抵消掉父级缩放, 方法是给它包一层 Sprite 式的做法 ——
-  // 用 scale 反向补偿, 使最终世界缩放是各向同性的。
+  // 坐标系: group 的缩放是等比 72 (0..1 模型局部 -> 世界单位), 位置取
+  // 包围盒最前端 (z 最大) 的中心, 再往前推一点避免被身体挡住。
+  // 火光世界尺寸约 4 单位 (屏高约 4%), 与原版小闪光相称。
   const flash = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({
@@ -1347,10 +1422,9 @@ export function makeBotMesh(modelName, weaponName) {
   } else {
     flash.position.set(0, 0.80, 0.62);
   }
-  // 反向补偿父级 (32,72,32): 让 flash 在世界上是 1.5 单位的正方形,
-  // 而不是随父级比例被拉成 1.5 x 3.4。
-  const FSIZE = 4.0;   // 世界上约 4 单位的正方形火光 (屏高约 4%)
-  flash.scale.set(FSIZE / 32, FSIZE / 72, FSIZE / 32);
+  // 火光世界尺寸 4 单位 (group 等比缩放 72, 直接除 72 即可)
+  const FSIZE = 4.0;
+  flash.scale.setScalar(FSIZE / 72);
   flash.visible = false;
   group.add(flash);
 

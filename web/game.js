@@ -150,11 +150,19 @@ function nearestLayerIndex(ls, y) {
   return bi;
 }
 
-function surfaceY(p, layer = 0) {
+// 就近选层: 在格的全部可站立高度里取与 curY 最接近的一层。
+// 斜坡/双层区域 (如 B 隧道顶的斜坡) 相邻格有两层, 固定 layer 索引会在格间
+// 切换时解析到下层, bot 模型半埋进坡里 —— 用当前高度就近选层可平滑贴地。
+function surfaceYNear(p, curY) {
   const c = A.cellOf(p);
   const ls = A.layers(c[0], c[1]);
   if (!ls.length) return 0;
-  return ls[clamp(Math.floor(layer || 0), 0, ls.length - 1)];
+  let best = ls[0], bd = Infinity;
+  for (const z of ls) {
+    const d = Math.abs(z - curY);
+    if (d < bd) { bd = d; best = z; }
+  }
+  return best;
 }
 
 function groundAt(p, fallbackY = 0) {
@@ -217,7 +225,7 @@ function createVisual(team, weaponId = null) {
     console.warn('[game] makeBotMesh 失败, 使用占位模型', e);
   }
   const group = new THREE.Group();
-  group.scale.set(32, 72, 32);
+  group.scale.setScalar(72);
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(0.8, 0.9, 0.5),
     new THREE.MeshBasicMaterial({ color: team === 't' ? 0x9a6b3c : 0x3c6b9a }),
@@ -339,7 +347,14 @@ class Bot {
     this.speed = Math.min(190 + roundNum * 8, 240) * diff;
     this.stats = { kills: 0, deaths: 0 };
     this.dead = false;
+    // CT bot 按概率带拆弹钳 (原版 $200, bot 用"回合越靠后越有钱"近似):
+    // 第 1 回合 30%, 之后每回合 +10%, 上限 80%。
+    this.hasKit = team === 'ct'
+      && Math.random() < Math.min(0.3 + (roundNum - 1) * 0.1, 0.8);
     this.fireTimer = rand(0.8, 2.0);
+    // 弹匣模拟: bot 打空弹匣要停火换弹 (原版 bot 的换弹窗口是玩家反打时机)
+    this.magAmmo = null;              // 延迟到首次开枪时按武器表填充
+    this.reloadUntil = 0;             // 换弹结束时刻 (S.time)
     this.strafeDir = Math.random() < 0.5 ? -1 : 1;
     this.strafeTimer = 0;
     this.attackRange = A.BOT_RANGE;
@@ -380,9 +395,10 @@ class Bot {
     // bot 的枪: 从本方军火库随机取一把, 与其手持模型/枪声/伤害保持一致
     const arsenal = (A.BOT_ARSENAL && A.BOT_ARSENAL[team]) || ['usp'];
     this.weaponId = choice(arsenal);
+    this.pickupDrop = null;         // 顺路去捡的掉落武器 (findDropUpgrade 产出)
     this.visual = createVisual(team, this.weaponId);
     addMesh(this.visual.group);
-    // 背包式 C4: 只有携带者可见 (局部空间, 根组已缩放 32/72/32)
+    // 背包式 C4: 只有携带者可见 (局部空间, 根组等比缩放 72)
     this.pack = new THREE.Mesh(
       new THREE.BoxGeometry(0.24, 0.17, 0.11),
       new THREE.MeshBasicMaterial({ color: 0x2d3034 }),
@@ -407,6 +423,9 @@ class Bot {
     g.position.set(this.pos[0], this.pos[1], this.pos[2]);
     // 逻辑 yaw (度) -> three.js +Y 旋转 (弧度): +z -> +x
     g.rotation.y = this.yaw * DEG;
+    // 蹲姿: 无蹲下动画, 用压扁 Y 近似 (0.72 = CS 蹲下身高比), 并同步碰撞盒
+    const wantScale = this.crouching ? 0.72 : 1;
+    if (Math.abs(g.scale.y - wantScale * 72) > 0.1) g.scale.y = wantScale * 72;
   }
 
   setCarrier(on) {
@@ -416,7 +435,46 @@ class Bot {
     if (on) this.repath();
   }
 
+  // 换掉手上的枪模 (拾取/丢枪后调用): 只重建 gunParts 的网格,
+  // 身体模型与动画保持不动。
+  refreshGunModel() {
+    const v = this.visual;
+    if (!v || !v.group) return;
+    for (const p of (v.gunParts || [])) {
+      if (p && p.mesh && p.mesh.parent) p.mesh.parent.remove(p.mesh);
+      if (p && p.mesh) disposeTree(p.mesh);
+    }
+    v.gunParts = [];
+    try {
+      const model = A.loadModel('player', 'w_' + this.weaponId);
+      for (const g of (model.groups || [])) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: g.texture || null, vertexColors: true, side: THREE.DoubleSide,
+          transparent: false, depthWrite: true, depthTest: true,
+        });
+        const mesh = new THREE.Mesh(g.geometry, mat);
+        v.group.add(mesh);
+        v.gunParts.push({ mesh, texture: g.texture || null });
+      }
+    } catch (_) { /* 资产缺失时保留旧枪模 */ }
+    if (v.flash) {
+      // 枪口位置随枪模变化: 用包围盒最前端重放 flash (与 makeBotMesh 同规则)
+      try {
+        const m = A.loadModel('player', 'w_' + this.weaponId);
+        const wb = m.meta && m.meta.bbox;
+        if (wb && wb[0] && wb[1]) {
+          v.flash.position.set(
+            (wb[0][0] + wb[1][0]) / 2,
+            (wb[0][1] + wb[1][1]) / 2,
+            wb[1][2] + 0.12);
+        }
+      } catch (_) { /* 保持原位 */ }
+    }
+  }
+
   stun(dur) { this.stunTimer = Math.max(this.stunTimer, dur); }
+
+  // 换枪 (拾取掉落) 后弹匣按新枪重置
 
   cellBlockedAt(p) { return cellBlockedAt(p); }
 
@@ -473,6 +531,10 @@ class Bot {
     } else if (this.team === 't' && B.state === 'live' && B.drop) {
       goal = A.nearestOpen(A.cellOf(B.drop.pos));
       goalY = B.drop.pos[1];
+    } else if (this.pickupDrop && this.pickupDrop.pos) {
+      // 顺路捡枪: 非交战时把寻路终点换成掉落武器位置 (C4 优先级更高)
+      goal = A.nearestOpen(A.cellOf(this.pickupDrop.pos));
+      goalY = this.pickupDrop.pos[1];
     } else if (this.state === 'hunt') {
       let kp = this.knownPos;
       if (!kp && this.team === 't') kp = S.botKnownPos;
@@ -519,8 +581,9 @@ class Bot {
       // 等于每次都让 bot 横穿整张图 —— 既不像 CS 的 bot 行为, 也会让寻路的
       // 目标格每次都不同, 流场缓存永远不命中 (实测每次新目标要重建流场
       // 12~17 ms, 8 个 bot 轮流重算就表现为周期性掉帧)。
-      // 现在在自己周围 12~40 格内取点: 路径短、目标重复率高、寻路接近免费。
-      goal = pickNearbyGoal(this.pos, 12, 40) || A.cellOf(this.pos);
+      // 现在在自己周围 30~70 格内取点: 每段路 3~6 秒, 目标重复率高、寻路接近免费,
+      // 观感是连续巡逻而不是走两步停一下。
+      goal = pickNearbyGoal(this.pos, 30, 70) || A.cellOf(this.pos);
     }
     if (!A.layers(goal[0], goal[1]).length) goal = A.nearestOpen(goal);
     this.goal = goal;
@@ -841,9 +904,19 @@ class Bot {
       if (this.health < this.maxHealth * 0.5 || Math.random() < 0.5) {
         this.strafeDir *= -1;
       }
+      // 蹲下交战 (原版 bot 远距离对枪会蹲: 命中率↑ 被命中率↓):
+      // 只在远距离站定时蹲, 蹲 0.8~1.6s 后起身继续走位。
+      const kind = (A.WEAPONS[this.weaponId] || {}).kind || 'rifle';
+      const crouchOk = dist > 350 && kind !== 'shotgun' && !hurt;
+      this.crouching = crouchOk && Math.random() < 0.35;
+      this.crouchUntil = this.crouching ? S.time + rand(0.8, 1.6) : 0;
     }
-    this.moveAxis(-fz * this.strafeDir * this.speed * 0.5 * dt,
-      fx * this.strafeDir * this.speed * 0.5 * dt);
+    // 蹲伏计时结束起身; 蹲下时不横移 (压枪站定)
+    if (this.crouching && S.time >= (this.crouchUntil || 0)) this.crouching = false;
+    if (!this.crouching) {
+      this.moveAxis(-fz * this.strafeDir * this.speed * 0.5 * dt,
+        fx * this.strafeDir * this.speed * 0.5 * dt);
+    }
 
     // 距离控制: 远压近拉; 残血时优先脱离
     const hurt = this.health < this.maxHealth * 0.35;
@@ -859,6 +932,23 @@ class Bot {
       this.fireTimer = 0.3;
       return;
     }
+    // 换弹中不开火 (武器切换/拾取时重置弹匣)
+    if (this.reloadUntil > 0) {
+      if (S.time < this.reloadUntil) return;
+      this.reloadUntil = 0;
+    }
+    if (this.magAmmo === null || this.magWid !== this.weaponId) {
+      this.magWid = this.weaponId;
+      this.magAmmo = (A.WEAPONS[this.weaponId] || {}).clip_size ?? 1;
+    }
+    if (this.magAmmo <= 0) {
+      // 打空弹匣: 停火换弹 (霰弹枪逐发上弹时间更长)
+      const wd = A.WEAPONS[this.weaponId] || A.WEAPONS.ak47;
+      this.reloadUntil = S.time + (wd.kind === 'shotgun' ? 3.2 : 2.4);
+      play(wd.reload_sfx || 'reload_rifle', this.pos);
+      return;
+    }
+    this.magAmmo -= 1;
     this.fireTimer = this.reactionDelay(dist);
     const wstat = A.WEAPONS[this.weaponId] || A.WEAPONS.ak47;
     play(wstat.sfx || 'fire_ak47');
@@ -872,11 +962,21 @@ class Bot {
       this.visual.flash.rotation.z = rand(0, Math.PI / 2);
       this.muzzleUntil = S.time + 0.06;
     }
+    // 武器个性化命中模型 (还原 CS 1.5 各枪手感):
+    //   散布大的枪 (SMG/霰弹) 距离衰减更陡, 狙击枪远距离不衰减,
+    //   射速快的枪连发后命中率下降 (模拟 bot 也受 inaccuracy 影响)。
+    const kindStat = wstat.kind || 'rifle';
     let hitChance = Math.max(0.14, 0.82 - dist * 0.00065);
+    hitChance *= { sniper: 1.15, rifle: 1.0, smg: 0.85, pistol: 0.9,
+                   shotgun: 0.8, mg: 0.8 }[kindStat] ?? 1;
     if (dist > 700) hitChance *= 0.72;
     else if (dist > 450) hitChance *= 0.86;
+    if (kindStat === 'sniper') hitChance = Math.min(hitChance * 1.5, 0.95);
+    if (this.crouching) hitChance = Math.min(hitChance * 1.2, 0.95);
     if (Math.random() >= hitChance) return;
-    const base = wstat.dmg * Math.max(1, wstat.pellets | 0 || 1) * 0.28;
+    // 霰弹按 pellets 折算伤害, 其余枪一发
+    const base = wstat.dmg * (kindStat === 'shotgun'
+      ? Math.max(2, Math.round((wstat.pellets | 0 || 1) * 0.4)) : 1) * 0.28;
     const headshot = Math.random() < 0.12;
     const raw = Math.max(3, Math.round(base * rand(0.75, 1.25)));
     const dmg = headshot ? Math.round(raw * 2.5) : raw;
@@ -944,6 +1044,38 @@ class Bot {
       && S.BOMB.state === 'live') roundEnd('ct', 'eliminated');
   }
 
+  // 掉落武器拾取: 只有"比当前枪贵"的主武器才值得绕路 (原版 bot 语义);
+  // 手枪/匕首不捡 —— 中途换枪的空窗比小幅升级更亏。
+  findDropUpgrade(radius = 220) {
+    const curPrice = (A.WEAPONS[this.weaponId] || {}).price || 0;
+    let best = null, bestD = radius;
+    for (const d of S.drops) {
+      if (!d || !d.pos) continue;
+      const w = A.WEAPONS[d.wid];
+      if (!w || w.slot !== 1 || (w.price || 0) <= curPrice) continue;
+      const dd = dist2(this.pos, d.pos);
+      if (dd < bestD) { bestD = dd; best = d; }
+    }
+    return best;
+  }
+
+  // 走到掉落武器旁边就换枪 (bot 不需要按键); 枪模随 weaponId 一起重建
+  takeDrop(d) {
+    if (!d || !A.WEAPONS[d.wid]) return false;
+    const wid = d.wid;
+    const i = S.drops.indexOf(d);
+    if (i >= 0) {
+      dropMesh(d.mesh);
+      S.drops.splice(i, 1);
+    }
+    this.weaponId = wid;
+    this.magWid = wid;
+    this.magAmmo = A.WEAPONS[wid].clip_size ?? 1;
+    this.reloadUntil = 0;
+    this.refreshGunModel();
+    return true;
+  }
+
   c4Behavior(dt) {
     const B = S.BOMB;
     if (this.team !== 't' || B.state !== 'live' || B.carrier === 'player') return false;
@@ -1001,6 +1133,23 @@ class Bot {
         this.enemyAlone = eg.enemyAlone;
       }
       this.target = this.pickTarget();
+      // 路上有比当前枪更好的掉落主武器 -> 记下来 (非交战状态)。
+      // 目标选取在 repath() 里: pickupDrop 存在时把寻路终点换成掉落点。
+      // scanTimer 0.15s 节流, 只有目标变化才触发 repath, 不影响帧率。
+      if (!this.target && this.state !== 'combat') {
+        const drop = this.findDropUpgrade(220);
+        if (drop !== this.pickupDrop) {
+          this.pickupDrop = drop;
+          this.repath();
+        }
+        if (drop && dist2(this.pos, drop.pos) < 48) {
+          this.takeDrop(drop);
+          this.pickupDrop = null;
+        }
+      } else if (this.pickupDrop) {
+        this.pickupDrop = null;         // 交战中放弃捡枪
+        this.repath();
+      }
       // 没看到人但听到交火 -> 去支援。
       // 之前没有任何声音传播, 实测 T 打 B 点时守 A 的 CT 会整局不动。
       // 下包后 CT 必须直奔炸弹, 而不是 hunt 最后已知位置。
@@ -1075,17 +1224,22 @@ class Bot {
       }
       if (this.followPath(dt, 1.15)) {
         this.state = this.role === 'defend' ? 'move' : 'pause';
-        this.holdTimer = rand(1.5, 3);
+        this.holdTimer = rand(0.4, 1.0);
         this.repath();
       }
       this.facePath(this.knownPos || S.player.pos);
     } else if (this.state === 'move') {
       if (this.followPath(dt, 1)) {
-        // 炸弹已安放时不能停在 post 上守着 —— 必须继续去拆包
-        const defusing = (this.team === 'ct' && S.BOMB.state === 'planted');
-        if (defusing) { this.repath(); }
-        else if (this.role === 'defend') this.state = 'hold';
-        else { this.state = 'pause'; this.holdTimer = rand(1.5, 3.5); }
+        if (this.pickupDrop) {
+          // 捡枪目标没达成 (路被堵/掉落刚消失): 清掉重新规划, 不进 hold/pause
+          this.pickupDrop = null;
+          this.state = 'move';
+          this.repath();
+        } else if (this.team === 'ct' && S.BOMB.state === 'planted') {
+          // 炸弹已安放时不能停在 post 上守着 —— 必须继续去拆包
+          this.repath();
+        } else if (this.role === 'defend') this.state = 'hold';
+        else { this.state = 'pause'; this.holdTimer = rand(0.4, 1.0); }
       }
       this.facePath();
     } else if (this.state === 'pause') {
@@ -1106,12 +1260,12 @@ class Bot {
       this.hold(dt);
     }
 
-    // 贴地锁定: 取当前格第 layer 层
-    this.pos[1] = 0.05 + surfaceY(this.pos, this.layer);
+    // 贴地锁定: 用就近选层 (斜坡/双层区域固定层号会切到下层导致模型半埋)
+    this.pos[1] = 0.05 + surfaceYNear(this.pos, this.pos[1]);
     if (this.cellBlockedAt(this.pos)) {
       this.pos[0] = this.lastSafe[0];
       this.pos[2] = this.lastSafe[2];
-      this.pos[1] = 0.05 + surfaceY(this.lastSafe, this.layer);
+      this.pos[1] = 0.05 + surfaceYNear(this.lastSafe, this.pos[1]);
     } else {
       this.lastSafe = [this.pos[0], 0, this.pos[2]];
     }
@@ -1331,12 +1485,37 @@ function clearDropMeshes() {
 }
 
 // 掉落武器: 保留拾取时的弹匣/备弹, 网格留在场景里到 ttl 归零。
+// 视觉用烘焙好的 w_* 枪模平放在地面 (与原版一致), 资产缺失时退回方块。
+function dropWeaponMesh(wid, pos) {
+  let group = null;
+  try {
+    const model = A.loadModel('player', 'w_' + wid);
+    if (model.groups && model.groups.length) {
+      group = new THREE.Group();
+      for (const g of model.groups) {
+        const mat = new THREE.MeshBasicMaterial({
+          map: g.texture || null, vertexColors: true, side: THREE.DoubleSide,
+          transparent: false, depthWrite: true, depthTest: true,
+        });
+        group.add(new THREE.Mesh(g.geometry, mat));
+      }
+      // w_* 模型归一化在 0..1 的相机空间, 实际尺寸约 0.1~0.7;
+      // 放大到世界比例后绕 y 转个随机朝向, 贴地平放。
+      group.scale.setScalar(60);
+      group.rotation.y = rand(0, Math.PI * 2);
+      group.position.set(pos[0], pos[1] - 14, pos[2]);
+      addMesh(group);
+    }
+  } catch (_) { /* 资产缺失 -> 方块 */ }
+  return group || makeBox([14, 4, 6], 0x9a8250, pos);
+}
+
 function spawnWeaponDrop(pos, wid, clip = null, reserve = null) {
   const w = A.WEAPONS[wid];
   if (!w || !w.clip_size) return null;
   const p = safeArr(pos);
   const dp = [p[0], p[1] + 8, p[2]];
-  const mesh = makeBox([14, 4, 6], 0x9a8250, dp);
+  const mesh = dropWeaponMesh(wid, dp);
   const drop = {
     wid,
     clip: clip ?? w.clip_size,
@@ -1348,16 +1527,28 @@ function spawnWeaponDrop(pos, wid, clip = null, reserve = null) {
   return drop;
 }
 
+let lastPlayerPos = null;    // 上一帧玩家位置, 用于判定"正在移动"
 function tickDrops(dt) {
   for (let i = S.drops.length - 1; i >= 0; i--) {
     const d = S.drops[i];
     d.ttl -= dt;
-    if (d.mesh) d.mesh.rotation.y += 1.8 * dt;
+    // 只有方块占位才自旋; 真实枪模与原版一致静置在地面
+    if (d.mesh && d.mesh.isMesh) d.mesh.rotation.y += 1.8 * dt;
     if (d.ttl <= 0) {
       dropMesh(d.mesh);
       S.drops.splice(i, 1);
     }
   }
+  // 原版行为: 走到掉落武器上自动拾取 (E 仍可手动拾取)。
+  // 只在玩家实际移动且回合进行中检查, 避免回合开始原地站着就换掉手里的枪。
+  const p = S.player;
+  if (lastPlayerPos && !p.dead && !S.buyMenuOpen && S.drops.length
+      && S.round && S.round.phase === 'live' && S.BOMB.state !== 'over'
+      && (lastPlayerPos[0] !== p.pos[0] || lastPlayerPos[2] !== p.pos[2])) {
+    const near = S.drops.find(d => d && A.WEAPONS[d.wid] && dist2(p.pos, d.pos) < 40);
+    if (near) pickupWeapon();
+  }
+  lastPlayerPos = [p.pos[0], p.pos[2]];
 }
 
 export function pickupWeapon() {
@@ -2057,10 +2248,11 @@ function tickRound(dt) {
 
   const helper = S.allies.concat(S.enemies).find(a => a && a.enabled
     && a.health > 0 && a.team === 'ct' && dist3(a.pos, B.pos) < A.DEFUSE_RANGE);
+  const helperNeed = helper && helper.hasKit ? A.KIT_DEFUSE_TIME : A.DEFUSE_TIME;
   if (helper && (S.player.dead || flat > A.DEFUSE_RANGE || playerIsAttacker())) {
     B.allyDefuse += dt;
-    if (S.player.dead) callUI('showSpectate', `${helper.name} 正在拆除 C4  ${Math.max(0, 8 - B.allyDefuse).toFixed(0)}s`);
-    if (B.allyDefuse >= 8) { roundEnd('ct', 'defused'); return; }
+    if (S.player.dead) callUI('showSpectate', `${helper.name}${helper.hasKit ? '(拆弹钳)' : ''} 正在拆除 C4  ${Math.max(0, helperNeed - B.allyDefuse).toFixed(0)}s`);
+    if (B.allyDefuse >= helperNeed) { roundEnd('ct', 'defused'); return; }
   } else {
     B.allyDefuse = Math.max(0, B.allyDefuse - dt * 0.6);
     if (S.player.dead) callUI('showSpectate', '你已阵亡  ·  观战队友');

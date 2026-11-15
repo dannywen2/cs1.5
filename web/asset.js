@@ -16,6 +16,9 @@ export const PLAYER_HALF = 16;
 export const STEP_HEIGHT = 18;
 export const GRAVITY = 800;
 export const JUMP_SPEED = 268;
+// 空中变向控制 (GoldSrc air accelerate): 空中按键仍可小幅改变速度方向,
+// 这是 bhop / 空中 strafe 手感的核心。上限取原版 sv_airaccelerate 10 的等效值。
+export const AIR_CONTROL = 0.55;
 export const RUN_SPEED = 250;
 export const WALK_SPEED = 133;
 export const CROUCH_SPEED = 130;
@@ -46,7 +49,8 @@ export const HULL1_PAD = 36;
 //   pellets    每次射击弹丸数 (霰弹枪 > 1)
 //   interval   射击间隔秒 (60/rpm)
 //   clip/reserve  弹匣容量 / 备弹
-//   spread     腰射基础散布 (弧度)
+//   spread     站定首发基础散布 (弧度): 取 GoldSrc 原版量级 (~0.3-0.5°),
+//              静止首发近乎精准; 移动/连射惩罚见 SPREAD_TUNING 的动态放大
 //   recoil     每发上抬的后坐 (度)
 //   armor_ratio 有甲时伤害保留比例 (0.5 = 护甲吸收一半)
 //   range_mod  远距离伤害衰减系数 (每单位距离)
@@ -65,32 +69,32 @@ export const WEAPONS = {
   // ---------------- 手枪 ----------------
   glock18: {
     name: 'Glock-18', dmg: 25, pellets: 1, interval: 0.15, clip_size: 20, reserve: 120,
-    spread: 0.013, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 400, kill_reward: 300,
+    spread: 0.005, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 400, kill_reward: 300,
     melee: false, auto: true, slot: 2, team: 't', sfx: 'fire_glock18', reload_sfx: 'reload_pistol', kind: 'pistol', burst: true, crosshair: 'cross',
   },
   usp: {
     name: 'USP', dmg: 34, pellets: 1, interval: 0.15, clip_size: 12, reserve: 100,
-    spread: 0.010, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 500, kill_reward: 300,
+    spread: 0.004, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 500, kill_reward: 300,
     melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_usp', reload_sfx: 'reload_pistol', kind: 'pistol', silencer: true, crosshair: 'cross',
   },
   p228: {
     name: 'P228', dmg: 32, pellets: 1, interval: 0.15, clip_size: 13, reserve: 52,
-    spread: 0.011, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 600, kill_reward: 300,
+    spread: 0.005, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 600, kill_reward: 300,
     melee: false, auto: false, slot: 2, team: null, sfx: 'fire_p228', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   deagle: {
     name: 'Desert Eagle', dmg: 53, pellets: 1, interval: 0.30, clip_size: 7, reserve: 35,
-    spread: 0.012, recoil: 2.2, armor_ratio: 0.5, range_mod: 0.98, price: 650, kill_reward: 300,
+    spread: 0.005, recoil: 2.2, armor_ratio: 0.5, range_mod: 0.98, price: 650, kill_reward: 300,
     melee: false, auto: false, slot: 2, team: null, sfx: 'fire_deagle', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   elite: {
     name: '双 Beretta', dmg: 38, pellets: 1, interval: 0.10, clip_size: 15, reserve: 120,
-    spread: 0.013, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 1000, kill_reward: 300,
+    spread: 0.007, recoil: 1.0, armor_ratio: 0.5, range_mod: 0.99, price: 1000, kill_reward: 300,
     melee: false, auto: false, slot: 2, team: 't', sfx: 'fire_elite', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
   fiveseven: {
     name: 'Five-SeveN', dmg: 27, pellets: 1, interval: 0.15, clip_size: 20, reserve: 100,
-    spread: 0.011, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 750, kill_reward: 300,
+    spread: 0.004, recoil: 0.9, armor_ratio: 0.5, range_mod: 0.99, price: 750, kill_reward: 300,
     melee: false, auto: false, slot: 2, team: 'ct', sfx: 'fire_fiveseven', reload_sfx: 'reload_pistol', kind: 'pistol', crosshair: 'cross',
   },
 
@@ -109,49 +113,49 @@ export const WEAPONS = {
   // ---------------- 冲锋枪 ----------------
   tmp: {
     name: 'TMP', dmg: 20, pellets: 1, interval: 0.07, clip_size: 30, reserve: 120,
-    spread: 0.018, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 1250, kill_reward: 600,
+    spread: 0.008, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 1250, kill_reward: 600,
     melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_tmp', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   mac10: {
     name: 'MAC-10', dmg: 29, pellets: 1, interval: 0.07, clip_size: 30, reserve: 100,
-    spread: 0.020, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.94, price: 1400, kill_reward: 600,
+    spread: 0.010, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.94, price: 1400, kill_reward: 600,
     melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_mac10', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   mp5: {
     name: 'MP5 Navy', dmg: 27, pellets: 1, interval: 0.08, clip_size: 30, reserve: 120,
-    spread: 0.017, recoil: 1.1, armor_ratio: 0.6, range_mod: 0.96, price: 1500, kill_reward: 600,
+    spread: 0.008, recoil: 1.1, armor_ratio: 0.6, range_mod: 0.96, price: 1500, kill_reward: 600,
     melee: false, auto: true, slot: 1, team: null, sfx: 'fire_mp5', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   ump45: {
     name: 'UMP45', dmg: 30, pellets: 1, interval: 0.09, clip_size: 25, reserve: 100,
-    spread: 0.017, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.96, price: 1700, kill_reward: 600,
+    spread: 0.008, recoil: 1.2, armor_ratio: 0.6, range_mod: 0.96, price: 1700, kill_reward: 600,
     melee: false, auto: true, slot: 1, team: null, sfx: 'fire_ump45', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
   p90: {
     name: 'P90', dmg: 21, pellets: 1, interval: 0.07, clip_size: 50, reserve: 100,
-    spread: 0.016, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 2750, kill_reward: 600,
+    spread: 0.007, recoil: 1.0, armor_ratio: 0.6, range_mod: 0.95, price: 2750, kill_reward: 600,
     melee: false, auto: true, slot: 1, team: null, sfx: 'fire_p90', reload_sfx: 'reload_smg', kind: 'smg', crosshair: 'cross',
   },
 
   // ---------------- 步枪 ----------------
   ak47: {
     name: 'AK-47', dmg: 36, pellets: 1, interval: 0.095, clip_size: 30, reserve: 90,
-    spread: 0.016, recoil: 1.7, armor_ratio: 0.775, range_mod: 0.98, price: 2500, kill_reward: 300,
+    spread: 0.005, recoil: 1.7, armor_ratio: 0.775, range_mod: 0.98, price: 2500, kill_reward: 300,
     melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_ak47', reload_sfx: 'reload_rifle', kind: 'rifle', crosshair: 'cross',
   },
   m4a1: {
     name: 'M4A1', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
-    spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3100, kill_reward: 300,
+    spread: 0.004, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3100, kill_reward: 300,
     melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_m4a1', reload_sfx: 'reload_rifle', kind: 'rifle', silencer: true, crosshair: 'cross',
   },
   sg552: {
     name: 'SG552 Commando', dmg: 33, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
-    spread: 0.016, recoil: 1.5, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
+    spread: 0.005, recoil: 1.5, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
     melee: false, auto: true, slot: 1, team: 't', sfx: 'fire_sg552', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true, zoomLevels: [40], crosshair: 'cross',
   },
   aug: {
     name: 'AUG', dmg: 32, pellets: 1, interval: 0.087, clip_size: 30, reserve: 90,
-    spread: 0.015, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
+    spread: 0.004, recoil: 1.4, armor_ratio: 0.7, range_mod: 0.97, price: 3500, kill_reward: 300,
     melee: false, auto: true, slot: 1, team: 'ct', sfx: 'fire_aug', reload_sfx: 'reload_rifle', kind: 'rifle', zoom: true, zoomLevels: [40], crosshair: 'cross',
   },
 
@@ -180,7 +184,7 @@ export const WEAPONS = {
   // ---------------- 机枪 ----------------
   m249: {
     name: 'M249', dmg: 32, pellets: 1, interval: 0.08, clip_size: 100, reserve: 200,
-    spread: 0.020, recoil: 1.6, armor_ratio: 0.7, range_mod: 0.97, price: 5750, kill_reward: 300,
+    spread: 0.010, recoil: 1.6, armor_ratio: 0.7, range_mod: 0.97, price: 5750, kill_reward: 300,
     melee: false, auto: true, slot: 1, team: null, sfx: 'fire_m249', reload_sfx: 'reload_m249', kind: 'mg', crosshair: 'cross',
   },
 };
@@ -220,6 +224,43 @@ export const RECOIL_PATTERNS = {
   sg550:     [[0, 0.84], [0.12, 1.49], [-0.19, 2.52], [1.15, 1.73], [-1.49, 2.06], [1.87, 1.63], [-2.21, 2.16], [1.58, 1.44]],
   m249:      [[0, 0.56], [0.08, 0.99], [-0.13, 1.68], [0.77, 1.15], [-0.99, 1.38], [1.25, 1.09], [-1.47, 1.44], [1.06, 0.96]],
 };
+
+// ---------------------------------------------------------------------------
+// 逐枪散布调参 (还原 CS 1.5 每把枪自己的手感, 供 engine.js/main.js 使用)
+//   move    移动散布倍率 (乘以速度比例): 步枪越重越大, TMP/五七最稳
+//   air     空中散布倍率: 狙击枪跳狙惩罚最重
+//   crouch  蹲下收束系数: 狙击枪蹲狙收益最大, SMG 收益小
+//   heat    每发连射热度增速 (再乘以武器 recoil): AK 越扫越飘, P90 几乎线性
+//   burst   额外散布 (Glock 三连发模式的代价)
+// 未列出的枪走 DEFAULT_TUNING。
+// ---------------------------------------------------------------------------
+export const SPREAD_TUNING = {
+  knife:     { move: 0,   air: 0, crouch: 1,   heat: 0,   burst: 0 },
+  glock18:   { move: 1.1, air: 3.5, crouch: 0.70, heat: 0.30, burst: 0.6 },
+  usp:       { move: 0.8, air: 3.5, crouch: 0.65, heat: 0.35 },
+  p228:      { move: 0.9, air: 3.5, crouch: 0.65, heat: 0.40 },
+  deagle:    { move: 1.8, air: 4.5, crouch: 0.60, heat: 0.60 },
+  elite:     { move: 1.3, air: 4,   crouch: 0.70, heat: 0.40 },
+  fiveseven: { move: 0.7, air: 3,   crouch: 0.65, heat: 0.25 },
+  m3:        { move: 1.2, air: 5,   crouch: 0.80, heat: 0.50 },
+  xm1014:    { move: 1.3, air: 5,   crouch: 0.80, heat: 0.45 },
+  tmp:       { move: 0.7, air: 3,   crouch: 0.75, heat: 0.20 },
+  mac10:     { move: 1.6, air: 4.5, crouch: 0.80, heat: 0.50 },
+  mp5:       { move: 0.9, air: 3.5, crouch: 0.75, heat: 0.30 },
+  ump45:     { move: 1.0, air: 3.5, crouch: 0.75, heat: 0.35 },
+  p90:       { move: 0.8, air: 3.5, crouch: 0.75, heat: 0.25 },
+  ak47:      { move: 1.9, air: 4.5, crouch: 0.65, heat: 0.45 },
+  m4a1:      { move: 1.5, air: 4,   crouch: 0.65, heat: 0.35 },
+  sg552:     { move: 1.6, air: 4,   crouch: 0.65, heat: 0.40 },
+  aug:       { move: 1.4, air: 4,   crouch: 0.60, heat: 0.30 },
+  scout:     { move: 3.5, air: 6,   crouch: 0.50, heat: 0.50, scopedMove: 14 },
+  awp:       { move: 5.0, air: 8,   crouch: 0.50, heat: 0.60, scopedMove: 22 },
+  g3sg1:     { move: 3.0, air: 5.5, crouch: 0.55, heat: 0.45, scopedMove: 12 },
+  sg550:     { move: 3.0, air: 5.5, crouch: 0.55, heat: 0.45, scopedMove: 12 },
+  m249:      { move: 2.2, air: 5,   crouch: 0.80, heat: 0.40 },
+};
+// scopedMove: 开镜状态下的移动散布倍率 (原版开镜走动基本打不中)。
+export const DEFAULT_TUNING = { move: 1.6, air: 4, crouch: 0.65, heat: 0.35, burst: 0, scopedMove: 3 };
 
 // 部位伤害倍率 (CS 1.5 hitbox): 头 4x, 胸腹 1x, 手臂 0.5x, 腿 0.75x
 export const HITBOX_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, arm: 0.5, leg: 0.75 };
@@ -957,6 +998,24 @@ export function raySolidDistance(ox, oy, oz, dx, dy, dz, maxT) {
       if (enter < 0) continue;
       best = traceBspSubtree(bb.root, ox, oy, oz, dx, dy, dz, enter, best, best);
       if (best <= 0) return best;
+    }
+  }
+  return best < maxT ? best : -1;
+}
+
+// 从 (ox..) 出发跳过 skipT 之前的命中, 返回下一个实体入射 t。
+// 供穿墙 (wallbang) 使用: 先命中一面墙, 再从墙内继续找另一侧的出口/后墙。
+export function raySolidDistanceAfter(ox, oy, oz, dx, dy, dz, maxT, skipT) {
+  if (!hitState) return -1;
+  let best = maxT;
+  best = traceBspSubtree(hitState.head, ox, oy, oz, dx, dy, dz, skipT, maxT, best);
+  const br = hitState.brushes;
+  if (br && br.length) {
+    for (let k = 0; k < br.length; k++) {
+      const bb = br[k];
+      const enter = rayAabbEnter(ox, oy, oz, dx, dy, dz, bb.mins, bb.maxs, best);
+      if (enter < 0 || enter < skipT) continue;
+      best = traceBspSubtree(bb.root, ox, oy, oz, dx, dy, dz, enter, best, best);
     }
   }
   return best < maxT ? best : -1;

@@ -30,6 +30,7 @@ let canvas = null;
 let lastTs = 0;
 let buyWasOpen = false;
 let shownWeapon = S.weapon;
+let crossGap = 0.012;               // 准星 gap 的平滑状态 (updateHUD 指数逼近)
 let lastWeapon = null;
 
 // toast 状态 (时间戳统一用 S.time, 由 game.js 的时钟驱动)
@@ -177,10 +178,32 @@ function initAudio() {
           } catch (_) { /* noop */ }
           src.connect(gain);
           gain.connect(pan);
-          pan.connect(master || ctx.destination);
-          src.onended = () => {
-            try { src.disconnect(); gain.disconnect(); pan.disconnect(); } catch (_) { /* 已释放 */ }
-          };
+          // 远处声音低通 (原版远枪声低闷): 600 单位内全频, 之后随距离收窄到 ~800Hz
+          if (typeof ctx.createBiquadFilter === 'function') {
+            const lp = ctx.createBiquadFilter();
+            lp.type = 'lowpass';
+            // listener 位置直接取 AudioContext (updateListener 每帧同步)
+            let lx = 0, ly = 0, lz = 0;
+            try {
+              const L = ctx.listener;
+              if (L.positionX) { lx = L.positionX.value; ly = L.positionY.value; lz = L.positionZ.value; }
+              else if (L.getPosition) { const q = L.getPosition(); lx = q.x; ly = q.y; lz = q.z; }
+            } catch (_) { /* fallback 用原点 */ }
+            const d = Math.hypot(p[0] - lx, p[1] - ly, p[2] - lz);
+            const t = clamp((d - 600) / 2400, 0, 1);
+            lp.frequency.value = 20000 - t * 19200;   // 20000 -> 800 Hz
+            lp.Q.value = 0;
+            pan.connect(lp);
+            lp.connect(master || ctx.destination);
+            src.onended = () => {
+              try { src.disconnect(); gain.disconnect(); pan.disconnect(); lp.disconnect(); } catch (_) { /* 已释放 */ }
+            };
+          } else {
+            pan.connect(master || ctx.destination);
+            src.onended = () => {
+              try { src.disconnect(); gain.disconnect(); pan.disconnect(); } catch (_) { /* 已释放 */ }
+            };
+          }
         } else {
           src.connect(gain);
           gain.connect(master || ctx.destination);
@@ -950,14 +973,26 @@ function updateHUD() {
   setOpacity(D.redFlash, (S.redFlash || 0) / 90);
   setOpacity(D.whiteFlash, (S.whiteFlash || 0) / 255);
 
-  // 准星: 按武器类型切换, gap 由移动/连射热度扩张
-  const moving = held('w', 'a', 's', 'd', 'KeyW', 'KeyA', 'KeyS', 'KeyD');
-  const gap = 0.012 + (moving ? 0.007 : 0) + (S.crossHeat || 0) * 0.007;
-  if (D.crosshair) {
-    D.crosshair.style.setProperty('--gap', `${(gap * (window.innerHeight || 600)).toFixed(1)}px`);
-    const wp = A.WEAPONS[S.weapon];
-    const ch = wp && wp.crosshair ? wp.crosshair : 'cross';
-    if (D.crosshair.getAttribute('data-ch') !== ch) D.crosshair.setAttribute('data-ch', ch);
+  // 准星: 形状按武器切换; gap 还原 CS 1.5 的 inaccuracy 视觉反馈——
+  //   逐枪调参 (SPREAD_TUNING) 与真实弹道散布共用同一组系数, 指数平滑逼近
+  //   目标值, 让准星缩放速度与每把枪的实际手感一致。
+  {
+    const wp0 = A.WEAPONS[S.weapon];
+    const tun0 = A.SPREAD_TUNING[S.weapon] || A.DEFAULT_TUNING;
+    const moving0 = held('w', 'a', 's', 'd', 'KeyW', 'KeyA', 'KeyS', 'KeyD');
+    const target = 0.010
+      + (moving0 ? clamp((S.player.speed || 0) / A.RUN_SPEED, 0, 1) * tun0.move * 0.010 : 0)
+      + (!S.player.grounded ? tun0.air * 0.008 : 0)
+      + ((S.player.crouching ? tun0.crouch : 1) - 1) * 0.010
+      + (S.crossHeat || 0) * tun0.heat * (wp0 ? (wp0.recoil || 1) : 1) * 0.006
+      + (wp0 && wp0.zoom && !S.scoped ? 0.020 : 0);
+    crossGap += (target - crossGap) * 0.22;
+    const gap = Math.max(0.006, crossGap);
+    if (D.crosshair) {
+      D.crosshair.style.setProperty('--gap', `${(gap * (window.innerHeight || 600)).toFixed(1)}px`);
+      const ch = wp0 && wp0.crosshair ? wp0.crosshair : 'cross';
+      if (D.crosshair.getAttribute('data-ch') !== ch) D.crosshair.setAttribute('data-ch', ch);
+    }
   }
   if (S.scoped && (!zoomable(S.weapon) || p.dead || S.buyMenuOpen)) setScope(false);
   show(D.crosshair, !S.scoped && !S.buyMenuOpen && !p.dead);
